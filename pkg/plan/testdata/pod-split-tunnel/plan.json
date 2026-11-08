@@ -1,0 +1,131 @@
+{
+  "mode": "pod",
+  "link": {
+    "name": "wg0",
+    "mtu": 1420
+  },
+  "device": {
+    "privateKey": "(redacted)",
+    "listenPort": 51820,
+    "fwMark": 51820,
+    "peers": [
+      {
+        "publicKey": "aYdQoJuTQzd0bwlzRIFn82TK4TLi+LMnrkkT5bVEUCk=",
+        "endpoint": "203.0.113.9:51820",
+        "allowedIPs": [
+          "10.10.0.1/32",
+          "192.168.10.0/24"
+        ]
+      },
+      {
+        "publicKey": "OyE87QA+ibNaJsIsvQEcm/qylXhBWyBp9/yLAZmLkD0=",
+        "allowedIPs": [
+          "10.10.0.3/32",
+          "10.96.5.0/24"
+        ]
+      }
+    ]
+  },
+  "addresses": [
+    "10.10.0.2/24"
+  ],
+  "routes": [
+    {
+      "type": "unicast",
+      "dst": "10.10.0.1/32",
+      "dev": "wg0",
+      "table": 51820
+    },
+    {
+      "type": "blackhole",
+      "dst": "10.10.0.1/32",
+      "table": 51820,
+      "metric": 65535
+    },
+    {
+      "type": "unicast",
+      "dst": "10.10.0.3/32",
+      "dev": "wg0",
+      "table": 51820
+    },
+    {
+      "type": "blackhole",
+      "dst": "10.10.0.3/32",
+      "table": 51820,
+      "metric": 65535
+    },
+    {
+      "type": "unicast",
+      "dst": "10.96.5.0/24",
+      "dev": "wg0",
+      "table": 51820
+    },
+    {
+      "type": "blackhole",
+      "dst": "10.96.5.0/24",
+      "table": 51820,
+      "metric": 65535
+    },
+    {
+      "type": "unicast",
+      "dst": "192.168.10.0/24",
+      "dev": "wg0",
+      "table": 51820
+    },
+    {
+      "type": "blackhole",
+      "dst": "192.168.10.0/24",
+      "table": 51820,
+      "metric": 65535
+    }
+  ],
+  "rules": [
+    {
+      "priority": 31000,
+      "family": 4,
+      "dst": "10.96.0.0/12",
+      "table": 254
+    },
+    {
+      "priority": 31000,
+      "family": 4,
+      "dst": "10.244.0.0/16",
+      "table": 254
+    },
+    {
+      "priority": 31000,
+      "family": 4,
+      "dst": "172.18.0.2/32",
+      "table": 254
+    },
+    {
+      "priority": 31050,
+      "family": 4,
+      "ipProto": 17,
+      "sport": 51820,
+      "table": 254
+    },
+    {
+      "priority": 31100,
+      "family": 4,
+      "table": 254,
+      "suppressPrefixLength": 0
+    },
+    {
+      "priority": 31200,
+      "family": 4,
+      "mark": 51820,
+      "invert": true,
+      "table": 51820
+    }
+  ],
+  "sysctls": [
+    {
+      "key": "net.ipv4.conf.all.src_valid_mark",
+      "value": "1"
+    }
+  ],
+  "warnings": [
+    "AllowedIPs 10.96.5.0/24 is inside cluster range 10.96.0.0/12, so it is not routed through the tunnel"
+  ]
+}

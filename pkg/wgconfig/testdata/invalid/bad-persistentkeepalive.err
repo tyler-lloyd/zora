@@ -1,0 +1,1 @@
+line 6: PersistentKeepalive "70000": must be "off" or a number of seconds from 0 to 65535

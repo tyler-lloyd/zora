@@ -1,0 +1,1 @@
+{"cluster": {"podCIDRs": ["10.244.0.0/16"], "serviceCIDRs": ["10.96.0.0/12"], "nodeIPs": ["172.18.0.2"]}, "ipv6Disabled": true}

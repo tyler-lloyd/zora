@@ -1,0 +1,1 @@
+{"cluster": {"podCIDRs": ["10.244.0.0/16", "fd00:10:244::/56"], "serviceCIDRs": ["10.96.0.0/12", "fd00:10:96::/112"], "nodeIPs": ["172.18.0.2", "fc00:f853:ccd:e793::2"]}, "mode": "host", "ifName": "vpn0", "containerID": "0f3c9a1e5b7d", "uplinkMTU": 9001}

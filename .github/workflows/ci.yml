@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0
+      - run: make lint
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Allow rootless network namespaces
+        run: |
+          sudo modprobe wireguard
+          # Ubuntu 23.10+ blocks unprivileged user namespaces via AppArmor.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Unit, golden, property and netns tests
+        env:
+          ZORA_REQUIRE_NETNS: "1" # a runner that can't do netns must fail, not skip
+        run: make test cover
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make fuzz FUZZTIME=60s

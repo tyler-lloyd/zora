@@ -1,0 +1,22 @@
+{
+  "mode": "pod",
+  "link": {
+    "name": "wg0",
+    "mtu": 1420
+  },
+  "device": {
+    "privateKey": "(redacted)",
+    "peers": [
+      {
+        "publicKey": "aYdQoJuTQzd0bwlzRIFn82TK4TLi+LMnrkkT5bVEUCk=",
+        "endpoint": "198.51.100.20:51820",
+        "allowedIPs": [
+          "0.0.0.0/0"
+        ]
+      }
+    ]
+  },
+  "addresses": [
+    "100.64.0.2/32"
+  ]
+}

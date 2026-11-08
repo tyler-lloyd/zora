@@ -1,0 +1,38 @@
+{
+  "interface": {
+    "privateKey": "(redacted)",
+    "addresses": [
+      "10.64.12.7/32",
+      "fd00:64::12:7/128"
+    ],
+    "mtu": 1380,
+    "table": {
+      "mode": "auto"
+    },
+    "dns": [
+      "10.64.0.1",
+      "fd00:64::1"
+    ]
+  },
+  "peers": [
+    {
+      "publicKey": "aYdQoJuTQzd0bwlzRIFn82TK4TLi+LMnrkkT5bVEUCk=",
+      "presharedKey": "(redacted)",
+      "allowedIPs": [
+        "0.0.0.0/0",
+        "::/0"
+      ],
+      "endpoint": {
+        "host": "198.51.100.20",
+        "port": 51820
+      },
+      "persistentKeepalive": 25
+    }
+  ],
+  "warnings": [
+    {
+      "line": 5,
+      "message": "DNS is ignored: a pod's resolv.conf is managed by the kubelet; set spec.dnsConfig instead"
+    }
+  ]
+}

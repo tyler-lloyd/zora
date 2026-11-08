@@ -1,0 +1,115 @@
+{
+  "mode": "host",
+  "link": {
+    "name": "vpn0",
+    "mtu": 8921,
+    "birthName": "zw-6f807b5b8518"
+  },
+  "device": {
+    "privateKey": "(redacted)",
+    "peers": [
+      {
+        "publicKey": "aYdQoJuTQzd0bwlzRIFn82TK4TLi+LMnrkkT5bVEUCk=",
+        "endpoint": "198.51.100.20:51820",
+        "allowedIPs": [
+          "0.0.0.0/0",
+          "::/0"
+        ]
+      }
+    ]
+  },
+  "addresses": [
+    "10.64.12.7/32",
+    "fd00:64::12:7/128"
+  ],
+  "routes": [
+    {
+      "type": "unicast",
+      "dst": "0.0.0.0/0",
+      "dev": "vpn0",
+      "table": 51820
+    },
+    {
+      "type": "blackhole",
+      "dst": "0.0.0.0/0",
+      "table": 51820,
+      "metric": 65535
+    },
+    {
+      "type": "unicast",
+      "dst": "::/0",
+      "dev": "vpn0",
+      "table": 51820
+    },
+    {
+      "type": "blackhole",
+      "dst": "::/0",
+      "table": 51820,
+      "metric": 65535
+    }
+  ],
+  "rules": [
+    {
+      "priority": 31000,
+      "family": 4,
+      "dst": "10.96.0.0/12",
+      "table": 254
+    },
+    {
+      "priority": 31000,
+      "family": 4,
+      "dst": "10.244.0.0/16",
+      "table": 254
+    },
+    {
+      "priority": 31000,
+      "family": 4,
+      "dst": "172.18.0.2/32",
+      "table": 254
+    },
+    {
+      "priority": 31100,
+      "family": 4,
+      "table": 254,
+      "suppressPrefixLength": 0
+    },
+    {
+      "priority": 31200,
+      "family": 4,
+      "table": 51820
+    },
+    {
+      "priority": 31000,
+      "family": 6,
+      "dst": "fc00:f853:ccd:e793::2/128",
+      "table": 254
+    },
+    {
+      "priority": 31000,
+      "family": 6,
+      "dst": "fd00:10:96::/112",
+      "table": 254
+    },
+    {
+      "priority": 31000,
+      "family": 6,
+      "dst": "fd00:10:244::/56",
+      "table": 254
+    },
+    {
+      "priority": 31100,
+      "family": 6,
+      "table": 254,
+      "suppressPrefixLength": 0
+    },
+    {
+      "priority": 31200,
+      "family": 6,
+      "table": 51820
+    }
+  ],
+  "warnings": [
+    "ListenPort 51820 ignored in host mode: the socket is on the node, so a random port avoids clashing with other pods and the node's own WireGuard",
+    "FwMark ignored in host mode: it would apply to the node's routing, not the pod's"
+  ]
+}

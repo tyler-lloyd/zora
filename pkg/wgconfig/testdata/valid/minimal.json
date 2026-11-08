@@ -1,0 +1,13 @@
+{
+  "interface": {
+    "privateKey": "(redacted)",
+    "table": {
+      "mode": "auto"
+    }
+  },
+  "peers": [
+    {
+      "publicKey": "aYdQoJuTQzd0bwlzRIFn82TK4TLi+LMnrkkT5bVEUCk="
+    }
+  ]
+}

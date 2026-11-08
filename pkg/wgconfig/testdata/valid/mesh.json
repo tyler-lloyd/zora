@@ -1,0 +1,41 @@
+{
+  "interface": {
+    "privateKey": "(redacted)",
+    "addresses": [
+      "10.10.0.2/24"
+    ],
+    "listenPort": 51820,
+    "table": {
+      "mode": "auto"
+    }
+  },
+  "peers": [
+    {
+      "publicKey": "aYdQoJuTQzd0bwlzRIFn82TK4TLi+LMnrkkT5bVEUCk=",
+      "allowedIPs": [
+        "10.10.0.1/32",
+        "192.168.10.0/24"
+      ],
+      "endpoint": {
+        "host": "gw.example.com",
+        "port": 51820
+      }
+    },
+    {
+      "publicKey": "OyE87QA+ibNaJsIsvQEcm/qylXhBWyBp9/yLAZmLkD0=",
+      "allowedIPs": [
+        "10.10.0.3/32"
+      ],
+      "endpoint": {
+        "host": "2001:db8::3",
+        "port": 51821
+      }
+    },
+    {
+      "publicKey": "5Cu/hTP08LHUTn/ByaxUpqw2hkLdG4oQoXdSVe7Qwxo=",
+      "allowedIPs": [
+        "10.10.0.4/32"
+      ]
+    }
+  ]
+}

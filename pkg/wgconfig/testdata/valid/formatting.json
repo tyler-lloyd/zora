@@ -1,0 +1,27 @@
+{
+  "interface": {
+    "privateKey": "(redacted)",
+    "addresses": [
+      "10.0.0.2/32",
+      "10.0.0.3/24",
+      "fd00::2/128"
+    ],
+    "fwMark": 4660,
+    "table": {
+      "mode": "off"
+    }
+  },
+  "peers": [
+    {
+      "publicKey": "aYdQoJuTQzd0bwlzRIFn82TK4TLi+LMnrkkT5bVEUCk=",
+      "allowedIPs": [
+        "10.0.0.0/24",
+        "10.1.2.3/32"
+      ],
+      "endpoint": {
+        "host": "vpn.example.com.",
+        "port": 4500
+      }
+    }
+  ]
+}

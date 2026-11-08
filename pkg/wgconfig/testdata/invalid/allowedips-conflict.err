@@ -1,0 +1,1 @@
+line 8: AllowedIPs 10.0.0.0/24 is also claimed by the peer on line 4; WireGuard would silently give it to only one of them
