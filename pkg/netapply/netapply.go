@@ -334,6 +334,51 @@ func removeInPod(p *plan.Plan) error {
 	return errors.Join(errs...)
 }
 
+// UplinkMTU returns the MTU of the named interface in the pod namespace.
+func UplinkMTU(podNS, name string) (int, error) {
+	var mtu int
+	err := nsutil.Do(podNS, func() error {
+		l, err := netlink.LinkByName(name)
+		if err != nil {
+			return err
+		}
+		mtu = l.Attrs().MTU
+		return nil
+	})
+	return mtu, err
+}
+
+// DeleteHostOrphans deletes host-mode WireGuard links (named with
+// plan.BirthName's prefix) left in the host namespace whose names keep does
+// not accept. A link only lives there for the moment between creation and
+// its move into a pod, so one that lingers belongs to a failed ADD. It
+// returns the names it deleted.
+func DeleteHostOrphans(opts Options, keep func(name string) bool) ([]string, error) {
+	h, err := hostHandle(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer h.Close()
+	links, err := h.LinkList()
+	if err != nil {
+		return nil, err
+	}
+	var deleted []string
+	var errs []error
+	for _, l := range links {
+		name := l.Attrs().Name
+		if l.Type() != "wireguard" || !plan.IsBirthName(name) || keep(name) {
+			continue
+		}
+		if err := h.LinkDel(l); err != nil {
+			errs = append(errs, fmt.Errorf("deleting %s: %w", name, err))
+			continue
+		}
+		deleted = append(deleted, name)
+	}
+	return deleted, errors.Join(errs...)
+}
+
 // Verify reports every difference between the pod namespace and p.
 func Verify(podNS string, p *plan.Plan) error {
 	return nsutil.Do(podNS, func() error { return verifyInPod(p) })
@@ -444,14 +489,9 @@ func verifyDevice(p *plan.Plan) error {
 		if got.PresharedKey != wantPSK {
 			mismatch("peer %s preshared key differs", want.PublicKey)
 		}
-		var gotEP netip.AddrPort
-		if got.Endpoint != nil {
-			gotEP = got.Endpoint.AddrPort()
-			gotEP = netip.AddrPortFrom(gotEP.Addr().Unmap(), gotEP.Port())
-		}
-		if want.Endpoint != nil && gotEP != *want.Endpoint {
-			mismatch("peer %s endpoint is %s, want %s", want.PublicKey, gotEP, want.Endpoint)
-		}
+		// Endpoints are deliberately not compared: WireGuard "roams" to
+		// wherever authenticated packets come from (NAT rebinding, a peer
+		// changing networks), so a different endpoint is not drift.
 		if got.PersistentKeepaliveInterval != time.Duration(want.PersistentKeepalive)*time.Second {
 			mismatch("peer %s keepalive is %s, want %ds", want.PublicKey, got.PersistentKeepaliveInterval, want.PersistentKeepalive)
 		}

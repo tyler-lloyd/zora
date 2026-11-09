@@ -13,7 +13,7 @@ and every bug fix ships with a regression test that fails without the fix.
 | 1 | `make test` | Go | unit, golden-file and property tests (with `-race`) |
 | 2 | `make fuzz` | Go | parser contracts on arbitrary input |
 | 3 | `make test-netns` | Linux + `wireguard` module + unprivileged user namespaces (or root) | plans applied to real network namespaces, real tunnel traffic |
-| 4 | `make test-integration` *(planned)* | as tier 3 | the real plugin binary chained after reference CNI plugins |
+| 4 | `make test-integration` | as tier 3 | the real `zora-cni` binary, run by `libcni` after the reference `bridge`/`ptp` + `host-local` plugins |
 | 5 | `make e2e CNI=kindnet\|flannel\|cilium` *(planned)* | Docker + kind | full behaviour in a cluster |
 
 Tiers 0-2 need no root and no cluster, and they cover most of the logic: the
@@ -80,6 +80,16 @@ match the model's, so the properties hold in the kernel too.
 - Apply rolls back completely when any step fails, is retry-safe, and never
   touches an interface it didn't create; Remove restores the namespace
   exactly; Verify detects each kind of drift.
+
+`test/integration` (tier 4) runs the real binary the way a container runtime
+does, across CNI 0.4.0, 1.0.0 and 1.1.0, with a fake agent on a unix socket:
+ADD/CHECK/DEL (twice) with real traffic through the tunnel; unannotated pods
+untouched; ADD failing closed with the agent down while DEL still succeeds and
+the primary's IP is released; excluded namespaces and runtime-supplied pod
+annotations working without the agent; a failed apply leaving nothing
+behind; host mode; GC of orphaned host-side links; STATUS. The reference
+plugins are pinned as Go `tool` dependencies in `go.mod` and built by the
+test.
 
 When a tier-3 assertion fails, the message includes `ip`/`wg` dumps of the
 namespace (if those tools are installed).

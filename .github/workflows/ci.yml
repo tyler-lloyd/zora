@@ -33,7 +33,9 @@ jobs:
           sudo modprobe wireguard
           # Ubuntu 23.10+ blocks unprivileged user namespaces via AppArmor.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Unit, golden, property and netns tests
+      - name: Download modules (netns tests build plugins without network)
+        run: go mod download
+      - name: Unit, golden, property, netns and integration tests
         env:
           ZORA_REQUIRE_NETNS: "1" # a runner that can't do netns must fail, not skip
         run: make test cover

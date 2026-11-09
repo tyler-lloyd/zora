@@ -1,66 +1,19 @@
 package netapply
 
 import (
-	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"net"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 
+	"github.com/tyler-lloyd/zora/internal/plantest"
 	"github.com/tyler-lloyd/zora/internal/routesim"
 	"github.com/tyler-lloyd/zora/internal/testns"
-	"github.com/tyler-lloyd/zora/pkg/plan"
-	"github.com/tyler-lloyd/zora/pkg/wgconfig"
 )
-
-// goldenCase is one of pkg/plan's golden inputs, so every routing scenario
-// added there is automatically applied to a real kernel here.
-type goldenCase struct {
-	name string
-	in   plan.Input
-	plan *plan.Plan
-}
-
-func goldenCases(t *testing.T) []goldenCase {
-	t.Helper()
-	confs, _ := filepath.Glob("../plan/testdata/*/wg.conf")
-	if len(confs) == 0 {
-		t.Fatal("no golden cases found in ../plan/testdata")
-	}
-	var out []goldenCase
-	for _, confPath := range confs {
-		dir := filepath.Dir(confPath)
-		conf, err := os.ReadFile(confPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, "input.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var in plan.Input
-		if err := json.Unmarshal(raw, &in); err != nil {
-			t.Fatal(err)
-		}
-		cfg, err := wgconfig.Parse(conf)
-		if err != nil {
-			t.Fatal(err)
-		}
-		in.Config = cfg
-		p, err := plan.Compute(in)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, goldenCase{name: filepath.Base(dir), in: in, plan: p})
-	}
-	return out
-}
 
 // TestKernelAgreesWithModel applies every golden plan to a real namespace,
 // then checks, for many destinations and fwmarks, that the kernel's routing
@@ -72,40 +25,40 @@ func goldenCases(t *testing.T) []goldenCase {
 // the namespace exactly.
 func TestKernelAgreesWithModel(t *testing.T) {
 	testns.RequireWireGuard(t)
-	for _, gc := range goldenCases(t) {
-		t.Run(gc.name, func(t *testing.T) {
+	for _, gc := range plantest.Cases(t) {
+		t.Run(gc.Name, func(t *testing.T) {
 			host, pod := testns.New(t, "host"), newPod(t)
 			before, hostBefore := snapshot(t, pod), snapshot(t, host)
 			opts := Options{HostNS: host.Path}
-			if err := Apply(pod.Path, gc.plan, opts); err != nil {
+			if err := Apply(pod.Path, gc.Plan, opts); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
-			if err := Verify(pod.Path, gc.plan); err != nil {
+			if err := Verify(pod.Path, gc.Plan); err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
 
 			rng := rand.New(rand.NewPCG(7, 7))
 			var prefixes []netip.Prefix
-			prefixes = append(prefixes, gc.in.Cluster.PodCIDRs...)
-			prefixes = append(prefixes, gc.in.Cluster.ServiceCIDRs...)
-			prefixes = append(prefixes, gc.in.Cluster.ExtraExcludes...)
-			prefixes = append(prefixes, gc.plan.Addresses...)
-			for _, peer := range gc.plan.Device.Peers {
+			prefixes = append(prefixes, gc.Input.Cluster.PodCIDRs...)
+			prefixes = append(prefixes, gc.Input.Cluster.ServiceCIDRs...)
+			prefixes = append(prefixes, gc.Input.Cluster.ExtraExcludes...)
+			prefixes = append(prefixes, gc.Plan.Addresses...)
+			for _, peer := range gc.Plan.Device.Peers {
 				prefixes = append(prefixes, peer.AllowedIPs...)
 			}
 			prefixes = append(prefixes,
 				netip.MustParsePrefix("169.254.1.1/32"), netip.MustParsePrefix("fe80::/64"),
 				netip.MustParsePrefix(podIP+"/24"), netip.MustParsePrefix(podIP6+"/64"))
-			extra := gc.in.Cluster.NodeIPs
-			for _, peer := range gc.plan.Device.Peers {
+			extra := gc.Input.Cluster.NodeIPs
+			for _, peer := range gc.Plan.Device.Peers {
 				if peer.Endpoint != nil {
 					extra = append(extra, peer.Endpoint.Addr())
 				}
 			}
 			probes := routesim.Probes(rng, prefixes, extra...)
 			marks := []uint32{0, 0x1}
-			if gc.plan.Device.FwMark != 0 {
-				marks = append(marks, gc.plan.Device.FwMark)
+			if gc.Plan.Device.FwMark != 0 {
+				marks = append(marks, gc.Plan.Device.FwMark)
 			}
 
 			compare := func(stage string) {
@@ -130,13 +83,13 @@ func TestKernelAgreesWithModel(t *testing.T) {
 			}
 			compare("link up")
 			// The kill switch is the other state that matters.
-			pod.Must(t, pod.Handle.LinkDel(pod.Link(t, gc.plan.Link.Name)))
+			pod.Must(t, pod.Handle.LinkDel(pod.Link(t, gc.Plan.Link.Name)))
 			compare("link deleted")
 			if t.Failed() {
-				t.Log(debugDump(pod))
+				t.Log(testns.DebugDump(pod))
 			}
 
-			if err := Remove(pod.Path, gc.plan, opts); err != nil {
+			if err := Remove(pod.Path, gc.Plan, opts); err != nil {
 				t.Fatalf("Remove: %v", err)
 			}
 			assertSameState(t, "pod after Remove", before, snapshot(t, pod))

@@ -169,3 +169,14 @@ func TestComputeIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestIsBirthName(t *testing.T) {
+	if n := BirthName("abc"); !IsBirthName(n) {
+		t.Fatalf("IsBirthName(BirthName(...)) = false for %q", n)
+	}
+	for _, n := range []string{"zw-", "zw-0123456789ab0", "zw-0123456789az", "wg0", "zx-0123456789ab", ""} {
+		if IsBirthName(n) {
+			t.Errorf("IsBirthName(%q) = true", n)
+		}
+	}
+}

@@ -236,3 +236,33 @@ func TestSysctlKeysAreValidated(t *testing.T) {
 		t.Errorf("sysctlPath = %q, %v", p, err)
 	}
 }
+
+func TestUplinkMTU(t *testing.T) {
+	pod := newPod(t)
+	pod.Must(t, pod.Handle.LinkSetMTU(pod.Link(t, "eth0"), 1450))
+	if mtu, err := UplinkMTU(pod.Path, "eth0"); err != nil || mtu != 1450 {
+		t.Fatalf("UplinkMTU = %d, %v; want 1450", mtu, err)
+	}
+	if _, err := UplinkMTU(pod.Path, "nope0"); err == nil {
+		t.Fatal("UplinkMTU of a missing link succeeded")
+	}
+}
+
+func TestDeleteHostOrphans(t *testing.T) {
+	testns.RequireWireGuard(t)
+	host := testns.New(t, "host")
+	keep, orphan := plan.BirthName("live"), plan.BirthName("dead")
+	for _, name := range []string{keep, orphan, "wg0"} {
+		host.Must(t, host.Handle.LinkAdd(&netlink.Wireguard{LinkAttrs: netlink.LinkAttrs{Name: name}}))
+	}
+	host.Dummy(t, plan.BirthName("not-wireguard")) // right name, wrong type: not ours
+	deleted, err := DeleteHostOrphans(Options{HostNS: host.Path}, func(n string) bool { return n == keep })
+	if err != nil || !slices.Equal(deleted, []string{orphan}) {
+		t.Fatalf("deleted %v, %v; want only %s", deleted, err, orphan)
+	}
+	for _, name := range []string{keep, "wg0", plan.BirthName("not-wireguard")} {
+		if _, err := host.Handle.LinkByName(name); err != nil {
+			t.Errorf("%s was deleted: %v", name, err)
+		}
+	}
+}

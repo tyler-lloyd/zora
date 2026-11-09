@@ -7,7 +7,7 @@ GO       ?= go
 PKGS     ?= ./...
 FUZZTIME ?= 30s
 
-.PHONY: all lint test test-netns cover fuzz update-golden
+.PHONY: all deps lint test test-netns test-integration cover fuzz update-golden
 
 all: lint test
 
@@ -18,13 +18,23 @@ lint:
 	$(GO) mod tidy -diff
 	@if command -v golangci-lint >/dev/null; then golangci-lint run; else echo "golangci-lint not installed; skipping"; fi
 
-## Tier 1: unit, golden and property tests.
-test:
+# The netns tiers build the reference CNI plugins inside a namespace with no
+# network, so every module (including tool dependencies) must be cached.
+deps:
+	$(GO) mod download
+
+## Tiers 1-4: unit, golden and property tests, plus netns and integration
+## tests where the machine supports them.
+test: deps
 	$(GO) test -race -count=1 $(PKGS)
 
 ## Tier 3: real network namespaces and tunnels. Fails instead of skipping.
 test-netns:
 	ZORA_REQUIRE_NETNS=1 $(GO) test -race -count=1 ./pkg/netapply/...
+
+## Tier 4: the real plugin binary in real CNI chains. Fails instead of skipping.
+test-integration: deps
+	ZORA_REQUIRE_NETNS=1 $(GO) test -race -count=1 ./test/integration/...
 
 cover:
 	$(GO) test -count=1 -coverprofile=coverage.out $(PKGS)

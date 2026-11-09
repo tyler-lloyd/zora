@@ -88,9 +88,9 @@ func newWorld(t *testing.T, rpFilter string) *world {
 	})
 	peer.Must(t, peer.Handle.LinkSetUp(peer.Link(t, "wg0")))
 
-	serveWhoami(t, peer, ":8080")           // the internet server, both families
-	serveWhoami(t, host, serviceIP+":8080") // a cluster Service
-	serveWhoami(t, pod, ":9090")            // the app in the pod, for kubelet probes
+	testns.ServeWhoami(t, peer, ":8080")           // the internet server, both families
+	testns.ServeWhoami(t, host, serviceIP+":8080") // a cluster Service
+	testns.ServeWhoami(t, pod, ":9090")            // the app in the pod, for kubelet probes
 	return w
 }
 
@@ -139,7 +139,7 @@ func TestTunnelTraffic(t *testing.T) {
 
 				// Control: before zora, the leak path works, so the kill-switch
 				// check below is meaningful.
-				mustWhoami(t, w.pod, inet, "", podIP, "control (no tunnel)")
+				testns.MustWhoami(t, w.pod, inet, "", podIP, "control (no tunnel)")
 				before := snapshot(t, w.pod)
 				hostBefore := snapshot(t, w.host)
 
@@ -154,19 +154,19 @@ func TestTunnelTraffic(t *testing.T) {
 					t.Fatalf("Verify after Apply: %v", err)
 				}
 
-				mustWhoami(t, w.pod, inet, "", tunPodIP, "IPv4 internet traffic goes through the tunnel")
-				mustWhoami(t, w.pod, inet6, "", tunPodIP6, "IPv6 internet traffic goes through the tunnel")
-				mustWhoami(t, w.pod, net.JoinHostPort(serviceIP, "8080"), "", podIP, "Service traffic stays on eth0")
-				mustWhoami(t, w.host, net.JoinHostPort(podIP, "9090"), nodeIP, nodeIP, "kubelet probes from the node IP get replies")
+				testns.MustWhoami(t, w.pod, inet, "", tunPodIP, "IPv4 internet traffic goes through the tunnel")
+				testns.MustWhoami(t, w.pod, inet6, "", tunPodIP6, "IPv6 internet traffic goes through the tunnel")
+				testns.MustWhoami(t, w.pod, net.JoinHostPort(serviceIP, "8080"), "", podIP, "Service traffic stays on eth0")
+				testns.MustWhoami(t, w.host, net.JoinHostPort(podIP, "9090"), nodeIP, nodeIP, "kubelet probes from the node IP get replies")
 				if got := w.peerSeenEndpoint(t); got != c.wantEndpoint {
 					t.Fatalf("peer saw encrypted packets from %s, want %s", got, c.wantEndpoint)
 				}
 
 				// Kill switch: remove the WireGuard link behind zora's back.
 				w.pod.Must(t, w.pod.Handle.LinkDel(w.pod.Link(t, p.Link.Name)))
-				mustNotConnect(t, w.pod, inet, "kill switch (IPv4)")
-				mustNotConnect(t, w.pod, inet6, "kill switch (IPv6)")
-				mustWhoami(t, w.pod, net.JoinHostPort(serviceIP, "8080"), "", podIP, "cluster traffic survives the tunnel going away")
+				testns.MustNotConnect(t, w.pod, inet, "kill switch (IPv4)")
+				testns.MustNotConnect(t, w.pod, inet6, "kill switch (IPv6)")
+				testns.MustWhoami(t, w.pod, net.JoinHostPort(serviceIP, "8080"), "", podIP, "cluster traffic survives the tunnel going away")
 				if err := Verify(w.pod.Path, p); err == nil {
 					t.Fatal("Verify passed with the WireGuard link deleted")
 				}
@@ -176,7 +176,7 @@ func TestTunnelTraffic(t *testing.T) {
 				}
 				assertSameState(t, "pod after Remove", before, snapshot(t, w.pod))
 				assertSameState(t, "host after Remove", hostBefore, snapshot(t, w.host))
-				mustWhoami(t, w.pod, inet, "", podIP, "after Remove the pod is back to normal")
+				testns.MustWhoami(t, w.pod, inet, "", podIP, "after Remove the pod is back to normal")
 			})
 		}
 	}

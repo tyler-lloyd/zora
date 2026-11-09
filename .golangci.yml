@@ -18,7 +18,7 @@ linters:
     rules:
       # Test-only helpers (fixtures, golden files, namespace harness): their
       # inputs come from the test itself.
-      - path: (_test\.go|internal/golden/|internal/testns/)
+      - path: (_test\.go|internal/(golden|plantest|testns)/)
         linters: [gosec]
 
 formatters:

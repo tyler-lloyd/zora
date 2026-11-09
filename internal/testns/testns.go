@@ -4,8 +4,8 @@
 //
 //	func TestMain(m *testing.M) { testns.Main(m) }
 //
-// Main re-executes the test binary inside a new network namespace (and, when
-// not root, a new user namespace that maps the caller to root). The tests
+// Main re-executes the test binary inside new network and mount namespaces
+// (and, when not root, a new user namespace that maps the caller to root). The tests
 // therefore never touch the machine's real network, even when run as root,
 // and need no sudo where unprivileged user namespaces are allowed.
 //
@@ -21,7 +21,9 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -43,14 +45,16 @@ const (
 // Main runs the tests inside fresh namespaces. It does not return.
 func Main(m *testing.M) {
 	if os.Getenv(envInside) == "1" {
-		os.Exit(m.Run())
+		os.Exit(runInside(m))
 	}
 	exe, err := os.Executable()
 	if err == nil {
 		cmd := exec.Command(exe, os.Args[1:]...)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		cmd.Env = append(os.Environ(), envInside+"=1")
-		attr := &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWNET, Pdeathsig: syscall.SIGKILL}
+		// The mount namespace lets New bind-mount namespaces at stable paths
+		// without touching the host's mounts.
+		attr := &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWNET | syscall.CLONE_NEWNS, Pdeathsig: syscall.SIGKILL}
 		if os.Geteuid() != 0 {
 			attr.Cloneflags |= syscall.CLONE_NEWUSER
 			attr.UidMappings = []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Geteuid(), Size: 1}}
@@ -74,12 +78,83 @@ func Main(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// runInside sets up the re-executed test process and runs the tests.
+func runInside(m *testing.M) int {
+	// Never propagate our bind mounts to the host's mount namespace (which
+	// matters when running as real root).
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+		panic(fmt.Sprintf("testns: making mounts private: %v", err))
+	}
+	dir, err := os.MkdirTemp("", "zora-testns-")
+	if err != nil {
+		panic(err)
+	}
+	mountDir = dir
+	defer func() { _ = os.RemoveAll(dir) }()
+	// Captured before any test switches a thread into another netns.
+	self, err := os.Open("/proc/thread-self/ns/net")
+	if err != nil {
+		panic(err)
+	}
+	processNS = self
+	return m.Run()
+}
+
+var (
+	// mountDir holds a bind mount per live namespace.
+	mountDir string
+	mounts   atomic.Int64
+)
+
+// bindMount pins the namespace open at a fresh path, as a container runtime
+// does (/var/run/netns/cni-...). Unlike /proc/<pid>/fd/<n> paths, which are
+// recycled once the fd is closed, a removed path stays gone: a stale
+// CNI_NETNS fails with ENOENT instead of silently naming another file.
+func bindMount(t testing.TB, name string, f *os.File) string {
+	t.Helper()
+	path := filepath.Join(mountDir, fmt.Sprintf("%s-%d", name, mounts.Add(1)))
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount(fmt.Sprintf("/proc/self/fd/%d", f.Fd()), path, "", unix.MS_BIND, ""); err != nil {
+		t.Fatalf("bind-mounting netns %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		_ = unix.Unmount(path, unix.MNT_DETACH)
+		_ = os.Remove(path)
+	})
+	return path
+}
+
 func skipOrFail(t testing.TB, reason string) {
 	t.Helper()
 	if os.Getenv(EnvRequire) == "1" {
 		t.Fatalf("%s (and %s=1)", reason, EnvRequire)
 	}
 	t.Skip(reason)
+}
+
+// processNS is the namespace the test process runs in (itself throwaway,
+// created by Main).
+var processNS *os.File
+
+// Current returns the test process's own namespace: the "host" for code that
+// acts on its own netns, such as a CNI plugin exec'd by the test. It is
+// throwaway too (Main created it), and is never closed.
+func Current(t testing.TB) *NS {
+	t.Helper()
+	if reason := os.Getenv(envUnavailable); reason != "" {
+		skipOrFail(t, reason)
+	}
+	if processNS == nil {
+		t.Fatal("testns.Current requires TestMain to call testns.Main")
+	}
+	h, err := netlink.NewHandleAt(netns.NsHandle(processNS.Fd())) // #nosec G115
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(h.Close)
+	return &NS{Name: "host", Path: bindMount(t, "host", processNS), Handle: h, file: processNS}
 }
 
 // NS is a throwaway network namespace.
@@ -107,11 +182,11 @@ func New(t testing.TB, name string) *NS {
 		_ = f.Close()
 		t.Fatalf("netlink handle for %s: %v", name, err)
 	}
-	ns := &NS{Name: name, Path: fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), f.Fd()), Handle: h, file: f}
 	t.Cleanup(func() {
 		h.Close()
 		_ = f.Close()
 	})
+	ns := &NS{Name: name, Path: bindMount(t, name, f), Handle: h, file: f}
 	ns.Must(t, ns.Handle.LinkSetUp(ns.Link(t, "lo")))
 	// Skip IPv6 duplicate address detection so link-local addresses (and
 	// their routes) appear promptly; see settle.

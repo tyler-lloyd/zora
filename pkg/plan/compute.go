@@ -60,8 +60,7 @@ func Compute(in Input) (*Plan, error) {
 		if in.ContainerID == "" {
 			return nil, errorf("host mode requires a container ID")
 		}
-		sum := sha256.Sum256([]byte(in.ContainerID))
-		p.Link.BirthName = hostBirthPrefix + hex.EncodeToString(sum[:])[:MaxIfNameLen-len(hostBirthPrefix)]
+		p.Link.BirthName = BirthName(in.ContainerID)
 	}
 
 	// Addresses.
@@ -225,6 +224,23 @@ func Compute(in Input) (*Plan, error) {
 		p.Sysctls = append(p.Sysctls, Sysctl{Key: "net.ipv4.conf.all.src_valid_mark", Value: "1"})
 	}
 	return p, nil
+}
+
+// BirthName is the temporary host-side name of a host-mode link for the
+// given container. It is deterministic so CNI DEL can clean up a link that a
+// failed ADD left in the host netns without asking the agent.
+func BirthName(containerID string) string {
+	sum := sha256.Sum256([]byte(containerID))
+	return hostBirthPrefix + hex.EncodeToString(sum[:])[:MaxIfNameLen-len(hostBirthPrefix)]
+}
+
+// IsBirthName reports whether name has the shape BirthName produces.
+func IsBirthName(name string) bool {
+	if len(name) != MaxIfNameLen || !strings.HasPrefix(name, hostBirthPrefix) {
+		return false
+	}
+	_, err := hex.DecodeString(name[len(hostBirthPrefix):])
+	return err == nil
 }
 
 func validateIfName(name string) error {
