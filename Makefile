@@ -43,6 +43,7 @@ cover:
 ## Tier 2: fuzzing. Each target runs for FUZZTIME.
 fuzz:
 	$(GO) test ./pkg/wgconfig -run='^$$' -fuzz=FuzzParse -fuzztime=$(FUZZTIME)
+	$(GO) test ./pkg/install -run='^$$' -fuzz=FuzzChain -fuzztime=$(FUZZTIME)
 
 ## Rewrite golden files after an intended change; review the diff.
 update-golden:

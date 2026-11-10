@@ -1,0 +1,37 @@
+{
+  "cniVersion": "0.3.1",
+  "name": "k8s-pod-network",
+  "plugins": [
+    {
+      "type": "calico",
+      "datastore_type": "kubernetes",
+      "ipam": {
+        "type": "calico-ipam"
+      }
+    },
+    {
+      "type": "portmap",
+      "snat": true,
+      "capabilities": {
+        "portMappings": true
+      }
+    },
+    {
+      "type": "istio-cni",
+      "log_level": "info",
+      "kubernetes": {
+        "kubeconfig": "/etc/cni/net.d/ZZZ-istio-cni-kubeconfig"
+      }
+    },
+    {
+      "type": "zora",
+      "capabilities": {
+        "io.kubernetes.cri.pod-annotations": true
+      },
+      "socket": "/var/run/zora/zora.sock",
+      "excludeNamespaces": [
+        "kube-system"
+      ]
+    }
+  ]
+}

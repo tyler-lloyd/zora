@@ -1,0 +1,40 @@
+{
+  "cniVersion": "0.4.0",
+  "name": "bridge",
+  "plugins": [
+    {
+      "cniVersion": "0.4.0",
+      "name": "bridge",
+      "type": "bridge",
+      "bridge": "cni0",
+      "isDefaultGateway": true,
+      "ipMasq": true,
+      "hairpinMode": true,
+      "ipam": {
+        "type": "host-local",
+        "ranges": [
+          [
+            {
+              "subnet": "10.85.0.0/16"
+            }
+          ]
+        ],
+        "routes": [
+          {
+            "dst": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    {
+      "type": "zora",
+      "capabilities": {
+        "io.kubernetes.cri.pod-annotations": true
+      },
+      "socket": "/var/run/zora/zora.sock",
+      "excludeNamespaces": [
+        "kube-system"
+      ]
+    }
+  ]
+}

@@ -19,7 +19,7 @@ import (
 	"github.com/tyler-lloyd/zora/pkg/plan"
 )
 
-var versions = []string{"0.4.0", "1.0.0", "1.1.0"}
+var versions = []string{"0.3.0", "0.3.1", "0.4.0", "1.0.0", "1.1.0"}
 
 const (
 	testNetns       = "/var/run/netns/cni-1234"
@@ -30,8 +30,8 @@ const (
 // prevResult is what a primary plugin (bridge + host-local, say) returns.
 func prevResult(ver string) map[string]any {
 	ip := map[string]any{"address": "10.244.0.5/24", "gateway": "10.244.0.1", "interface": 1}
-	if ver == "0.4.0" {
-		ip["version"] = "4"
+	if strings.HasPrefix(ver, "0.") {
+		ip["version"] = "4" // pre-1.0 results carry the IP version
 	}
 	return map[string]any{
 		"cniVersion": ver,

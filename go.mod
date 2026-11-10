@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/containernetworking/cni v1.3.1
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
 	golang.org/x/crypto v0.58.0

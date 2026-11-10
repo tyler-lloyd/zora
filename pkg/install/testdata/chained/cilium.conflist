@@ -1,0 +1,21 @@
+{
+  "cniVersion": "0.3.1",
+  "name": "cilium",
+  "plugins": [
+    {
+      "type": "cilium-cni",
+      "enable-debug": false,
+      "log-file": "/var/run/cilium/cilium-cni.log"
+    },
+    {
+      "type": "zora",
+      "capabilities": {
+        "io.kubernetes.cri.pod-annotations": true
+      },
+      "socket": "/var/run/zora/zora.sock",
+      "excludeNamespaces": [
+        "kube-system"
+      ]
+    }
+  ]
+}

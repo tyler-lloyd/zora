@@ -43,7 +43,7 @@ import (
 )
 
 // SupportedVersions are the CNI spec versions zora speaks.
-var SupportedVersions = version.PluginSupports("0.4.0", "1.0.0", "1.1.0")
+var SupportedVersions = version.PluginSupports("0.3.0", "0.3.1", "0.4.0", "1.0.0", "1.1.0")
 
 // DefaultExcludeNamespaces applies when the config has no
 // excludeNamespaces key. An explicit empty list excludes nothing.

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"cniVersio\xee\":\"1.0.0\",\"name\":\"n\",\"plugins\":[{\"type\":\"a\"},{\"tYpe\":\"zora\"},{\"tYpe\":\"0000\"}]}")

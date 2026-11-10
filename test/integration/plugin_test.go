@@ -57,7 +57,13 @@ func TestPlugin(t *testing.T) {
 					t.Errorf("agent report = %+v, %v", rep, ok)
 				}
 
-				if err := w.cni.CheckNetworkList(ctx, list, rt); err != nil {
+				err = w.cni.CheckNetworkList(ctx, list, rt)
+				if strings.HasPrefix(ver, "0.3.") {
+					// CHECK arrived in spec 0.4.0; runtimes don't send it for 0.3.x.
+					if err == nil || !strings.Contains(err.Error(), "does not support the CHECK command") {
+						t.Errorf("CHECK on %s = %v; libcni should refuse it", ver, err)
+					}
+				} else if err != nil {
 					t.Errorf("CHECK: %v", err)
 				}
 				testns.MustWhoami(t, pod, inet, "", tunIP, "pod traffic goes through the tunnel")

@@ -44,7 +44,8 @@ const (
 	podsPtp = "10.23.0.0/16" // ptp
 )
 
-var cniVersions = []string{"0.4.0", "1.0.0", "1.1.0"}
+// 0.3.1 matters: kindnet, flannel, Cilium and Calico all write it.
+var cniVersions = []string{"0.3.0", "0.3.1", "0.4.0", "1.0.0", "1.1.0"}
 
 // buildPlugins compiles zora-cni and the reference plugins (pinned in go.mod
 // as tools) into a temporary CNI bin dir, once per test binary.

@@ -43,6 +43,11 @@ tests as root.
   `input.json` (cluster CIDRs, mode, MTU, ...) and run `make update-golden`.
   Every golden plan is also checked against the routing properties below.
 
+- **Another primary CNI's config:** add it to
+  `pkg/install/testdata/primaries/` and run `make update-golden`. Every
+  fixture is chained, compared with `testdata/chained/`, checked against the
+  installer's contract (below) and seeds `FuzzChain`.
+
 Golden files are part of the review: a diff in `plan.json` *is* the change in
 kernel state your PR causes.
 
@@ -55,6 +60,18 @@ kernel state your PR causes.
   way to reveal a key, so every disclosure is explicit and greppable.
 - `Parse(Encode(c)) == c`, and `Encode` is a fixed point.
 - Hook directives (`PreUp`, `PostUp`, ...) and `SaveConfig` are always rejected.
+
+`pkg/install` (the CNI config installer)
+- zora never writes a config of its own, and never edits a primary config the
+  runtime would reject (mid-write, or invalid).
+- It edits only the runtime's file (lexically first), follows a new primary
+  (e.g. Cilium taking over) and removes itself from configs no longer read.
+- Chaining preserves every plugin, its position, unknown fields and key order;
+  zora updates its entry in place rather than fighting other chained plugins
+  for the last slot; chaining is idempotent and steady state writes nothing;
+  uninstall restores the original.
+- Converting a single `.conf` writes the `.conflist` before removing the
+  `.conf`, so the runtime never sees a gap.
 
 `pkg/plan` (`sim_test.go` models Linux policy routing and checks these on
 every golden case and on 5000 random configs):
