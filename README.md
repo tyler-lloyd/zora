@@ -129,3 +129,7 @@ namespaces, so they don't touch your machine's network.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) explains how the tests are organised and
 how to add a case, which is often just dropping in a file.
+
+## License
+
+zora is licensed under the [Apache License 2.0](LICENSE).
