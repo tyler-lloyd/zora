@@ -61,6 +61,24 @@ kernel state your PR causes.
 - `Parse(Encode(c)) == c`, and `Encode` is a fixed point.
 - Hook directives (`PreUp`, `PostUp`, ...) and `SaveConfig` are always rejected.
 
+`pkg/resolver`, `pkg/repair`, `pkg/agent` (the agent; tested against
+client-go's fake API server, and `pkg/agent` against real temp directories and
+a real socket)
+- Unannotated pods are skipped without reading any Secret.
+- A sandbox is matched to its pod by UID: a stale cache entry or a replaced
+  pod is never answered for.
+- Every config error reaches the runtime and a pod Event, with the Secret's
+  name and line number and never key material.
+- Host mode is refused, not downgraded, outside the admin's namespace list.
+- Repair never deletes a pod unless zora is installed, the pod is past its
+  grace period, a controller owns it, and no successful ADD was reported.
+- A restart leaves the plugin installed; only deleting the DaemonSet
+  uninstalls, config first and binary second.
+
+`test/integration` also runs the real plugin against the real resolver (a
+Pod and Secret in a fake API server), so the annotation-to-tunnel path is
+covered without a cluster.
+
 `pkg/install` (the CNI config installer)
 - zora never writes a config of its own, and never edits a primary config the
   runtime would reject (mid-write, or invalid).

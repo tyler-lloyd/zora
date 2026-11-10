@@ -141,6 +141,14 @@ func newWorld(t *testing.T) *world {
 	w.cni = libcni.NewCNIConfigWithCacheDir([]string{binDir}, t.TempDir(), nil)
 
 	testns.Veth(t, w.host, "veth-peer", w.peer, "eth0")
+	// The host namespace outlives this test. Its end of the veth would go
+	// away with the peer namespace, but only eventually; the next world
+	// must not race with that.
+	t.Cleanup(func() {
+		if l, err := w.host.Handle.LinkByName("veth-peer"); err == nil {
+			_ = w.host.Handle.LinkDel(l)
+		}
+	})
 	w.host.Addr(t, "veth-peer", hostIP+"/24")
 	w.peer.Addr(t, "eth0", peerIP+"/24")
 	w.peer.Route(t, podsV4, hostIP, "eth0")
@@ -189,29 +197,41 @@ func (w *world) wg(t *testing.T, cfg wgtypes.Config) {
 	})
 }
 
-// tunnelFor registers a pod with the peer and returns the plan the agent
-// should hand out for it, and the pod's tunnel address.
-func (w *world) tunnelFor(t *testing.T, mode plan.Mode, containerID string) (*plan.Plan, string) {
+// tunnelConf registers a new pod key with the peer and returns the wg-quick
+// config a user would put in a Secret, and the pod's tunnel address.
+func (w *world) tunnelConf(t *testing.T, endpointHost string) (conf, tunIP string) {
 	t.Helper()
 	podKey := genKey(t)
-	tunIP := fmt.Sprintf("10.200.0.%d", w.nextTunnel)
+	tunIP = fmt.Sprintf("10.200.0.%d", w.nextTunnel)
 	w.nextTunnel++
 	w.wg(t, wgtypes.Config{Peers: []wgtypes.PeerConfig{{
 		PublicKey:  podKey.PublicKey(),
 		AllowedIPs: []net.IPNet{*testns.IPNet(netip.MustParsePrefix(tunIP + "/32"))},
 	}}})
-	conf := fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = %s/32\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\nEndpoint = %s:51820\n",
-		podKey, tunIP, w.peerKey.PublicKey(), peerIP)
+	conf = fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = %s/32\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\nEndpoint = %s:51820\n",
+		podKey, tunIP, w.peerKey.PublicKey(), endpointHost)
+	return conf, tunIP
+}
+
+// clusterInfo is the cluster the test world pretends to be.
+func clusterInfo() plan.ClusterInfo {
+	return plan.ClusterInfo{
+		PodCIDRs:     []netip.Prefix{netip.MustParsePrefix(podsV4), netip.MustParsePrefix(podsPtp)},
+		ServiceCIDRs: []netip.Prefix{netip.MustParsePrefix("10.96.0.0/12")},
+	}
+}
+
+// tunnelFor returns the plan the fake agent should hand out for a new pod,
+// and the pod's tunnel address.
+func (w *world) tunnelFor(t *testing.T, mode plan.Mode, containerID string) (*plan.Plan, string) {
+	t.Helper()
+	conf, tunIP := w.tunnelConf(t, peerIP)
 	cfg, err := wgconfig.Parse([]byte(conf))
 	if err != nil {
 		t.Fatal(err)
 	}
 	p, err := plan.Compute(plan.Input{
-		Config: cfg, Mode: mode, ContainerID: containerID,
-		Cluster: plan.ClusterInfo{
-			PodCIDRs:     []netip.Prefix{netip.MustParsePrefix(podsV4), netip.MustParsePrefix(podsPtp)},
-			ServiceCIDRs: []netip.Prefix{netip.MustParsePrefix("10.96.0.0/12")},
-		},
+		Config: cfg, Mode: mode, ContainerID: containerID, Cluster: clusterInfo(),
 	})
 	if err != nil {
 		t.Fatal(err)
