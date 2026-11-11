@@ -9,7 +9,8 @@
 # cilium. For flannel and cilium, zora is installed *before* the primary, to
 # check that it waits for the primary's config instead of writing its own.
 #
-# Needs docker, kind, kubectl and helm, and the wireguard kernel module.
+# Needs docker, kind, kubectl and helm, and the wireguard kernel module
+# (plus br_netfilter for flannel).
 set -euo pipefail
 
 CNI=${CNI:-kindnet}
@@ -30,6 +31,10 @@ diagnose() {
   kubectl get pods -A -o wide
   kubectl -n zora-system describe pods | tail -40
   kubectl -n zora-system logs -l app.kubernetes.io/component=agent --tail=50
+  for sel in kube-flannel/app=flannel kube-system/k8s-app=cilium; do
+    kubectl -n "${sel%%/*}" logs -l "${sel#*/}" --all-containers --tail=30 2>/dev/null
+    kubectl -n "${sel%%/*}" logs -l "${sel#*/}" --all-containers --tail=30 --previous 2>/dev/null
+  done
   kubectl get events -A --sort-by=.lastTimestamp | tail -30
   docker exec "$NODE" sh -c 'ls -la /etc/cni/net.d /opt/cni/bin; cat /etc/cni/net.d/*.conflist'
 }
@@ -59,7 +64,7 @@ install_primary() {
       ;;
   esac
 }
-trap 'diagnose' ERR
+trap 'diagnose; exit 1' ERR
 
 step "cluster ($CNI)"
 if ! kind get clusters | grep -qx "$CLUSTER"; then

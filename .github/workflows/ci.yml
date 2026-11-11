@@ -79,7 +79,7 @@ jobs:
       - uses: helm/kind-action@v1
         with:
           install_only: true
-      - run: sudo modprobe wireguard
+      - run: sudo modprobe -a wireguard br_netfilter
       - run: hack/e2e-smoke.sh
         env:
           CNI: ${{ matrix.cni }}
