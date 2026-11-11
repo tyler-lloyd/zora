@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -13,8 +14,12 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/tyler-lloyd/zora/pkg/agentapi"
 	"github.com/tyler-lloyd/zora/pkg/install"
@@ -236,6 +241,84 @@ func TestAgentUninstallsWhenItsDaemonSetIsDeleted(t *testing.T) {
 	want, _, _ = install.Unchain(conflist, want)
 	if string(got) != string(want) {
 		t.Fatalf("the primary's config was not restored:\n%s", got)
+	}
+}
+
+// TestAgentUninstallsWhenItsPermissionsAreRevoked: helm uninstall and
+// namespace deletion remove the RBAC alongside the DaemonSet. An agent that
+// can no longer ask must not leave the plugin chained in with no agent.
+func TestAgentUninstallsWhenItsPermissionsAreRevoked(t *testing.T) {
+	for name, err := range map[string]error{
+		"forbidden":    apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "daemonsets"}, "zora-agent", errors.New("RBAC")),
+		"unauthorized": apierrors.NewUnauthorized("token revoked"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			n := start(t, true)
+			n.waitReady()
+			n.client.PrependReactor("get", "daemonsets", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, err
+			})
+			if err := n.stop(); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if n.chained() || n.binaryInstalled() {
+				t.Fatalf("chained = %v, binary = %v; both must be removed", n.chained(), n.binaryInstalled())
+			}
+		})
+	}
+}
+
+func TestAgentStaysInstalledWhenTheAPIServerIsUnreachable(t *testing.T) {
+	n := start(t, true)
+	n.waitReady()
+	n.client.PrependReactor("get", "daemonsets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("dial tcp 10.96.0.1:443: i/o timeout")
+	})
+	if err := n.stop(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !n.chained() || !n.binaryInstalled() {
+		t.Fatalf("chained = %v, binary = %v; a node that merely lost the API server must keep zora", n.chained(), n.binaryInstalled())
+	}
+}
+
+func TestRemoveDaemonSet(t *testing.T) {
+	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "zora-system", Name: "zora-agent"}}
+	client := fake.NewClientset(ds)
+	// Model foreground deletion: the DaemonSet lingers while its pods
+	// terminate, then disappears.
+	gets := 0
+	client.PrependReactor("get", "daemonsets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if gets++; gets <= 3 {
+			return true, ds, nil
+		}
+		return false, nil, nil
+	})
+	var policy *metav1.DeletionPropagation
+	client.PrependReactor("delete", "daemonsets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		policy = a.(k8stesting.DeleteAction).GetDeleteOptions().PropagationPolicy
+		return false, nil, nil
+	})
+	if err := RemoveDaemonSet(context.Background(), client, "zora-system", "zora-agent", time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if gets < 4 {
+		t.Fatalf("returned after %d checks, before the DaemonSet was gone", gets)
+	}
+	if policy == nil || *policy != metav1.DeletePropagationForeground {
+		t.Fatalf("propagation policy = %v, want foreground so the wait covers the pods", policy)
+	}
+	// Already gone (a retried hook): succeed.
+	if err := RemoveDaemonSet(context.Background(), client, "zora-system", "zora-agent", time.Millisecond); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	// Pods that never finish: give up with an explanation.
+	stuck := fake.NewClientset(ds)
+	stuck.PrependReactor("delete", "daemonsets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := RemoveDaemonSet(ctx, stuck, "zora-system", "zora-agent", time.Millisecond); err == nil || !strings.Contains(err.Error(), "waiting for DaemonSet") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

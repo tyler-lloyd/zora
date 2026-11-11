@@ -1,0 +1,29 @@
+zora is installing on every node. Check that the agents are ready:
+
+  kubectl -n {{ .Release.Namespace }} rollout status daemonset/{{ include "zora.agent" . }}
+
+An agent that is not ready says why:
+
+  kubectl -n {{ .Release.Namespace }} describe pods -l app.kubernetes.io/component=agent
+
+{{- if .Values.secrets.allNamespaces }}
+
+zora may read Secrets in every namespace.
+{{- else if .Values.secrets.namespaces }}
+
+Pods in these namespaces may use zora: {{ join ", " .Values.secrets.namespaces }}
+{{- else }}
+
+No namespace is enabled yet, so no pod can get a tunnel. Enable one with:
+
+  kubectl create rolebinding zora-secrets -n <namespace> \
+    --clusterrole={{ include "zora.name" . }}-secret-reader \
+    --serviceaccount={{ .Release.Namespace }}:{{ include "zora.agent" . }}
+{{- end }}
+
+To give a pod a tunnel, put a WireGuard config in a Secret under the key
+"wg0.conf" and annotate the pod:
+
+  zora.io/wireguard-secret: <secret name>
+
+If your cluster's CNI is Cilium, it must run with cni.exclusive=false.

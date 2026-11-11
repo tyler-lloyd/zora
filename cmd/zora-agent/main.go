@@ -2,6 +2,8 @@
 //
 //	zora-agent run        run the agent (the DaemonSet's command)
 //	zora-agent uninstall  remove zora from this node's CNI config and bin dir
+//	zora-agent pre-delete delete the agent DaemonSet and wait for every node
+//	                      to uninstall (the Helm chart's pre-delete hook)
 package main
 
 import (
@@ -38,8 +40,8 @@ func run(log *slog.Logger, args []string) error {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
 	}
-	if cmd != "run" && cmd != "uninstall" {
-		return fmt.Errorf("unknown command %q: use run or uninstall", cmd)
+	if cmd != "run" && cmd != "uninstall" && cmd != "pre-delete" {
+		return fmt.Errorf("unknown command %q: use run, uninstall or pre-delete", cmd)
 	}
 
 	fs := flag.NewFlagSet("zora-agent "+cmd, flag.ContinueOnError)
@@ -64,6 +66,7 @@ func run(log *slog.Logger, args []string) error {
 	fs.StringVar(&o.DaemonSetNamespace, "daemonset-namespace", os.Getenv("POD_NAMESPACE"), "namespace of the agent's DaemonSet")
 	fs.StringVar(&o.DaemonSetName, "daemonset-name", "", "name of the agent's DaemonSet; when it is deleted the agent uninstalls on exit")
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig file; default is in-cluster configuration")
+	timeout := fs.Duration("timeout", 5*time.Minute, "pre-delete: how long to wait for every node to uninstall")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -97,6 +100,24 @@ func run(log *slog.Logger, args []string) error {
 			return err
 		}
 		return a.Uninstall()
+	}
+
+	if cmd == "pre-delete" {
+		if o.DaemonSetName == "" || o.DaemonSetNamespace == "" {
+			return fmt.Errorf("pre-delete needs --daemonset-name and --daemonset-namespace")
+		}
+		cfg, err := restConfig(kubeconfig)
+		if err != nil {
+			return err
+		}
+		client, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		defer cancel()
+		log.Info("deleting the agent DaemonSet and waiting for nodes to uninstall", "daemonset", o.DaemonSetNamespace+"/"+o.DaemonSetName)
+		return agent.RemoveDaemonSet(ctx, client, o.DaemonSetNamespace, o.DaemonSetName, 2*time.Second)
 	}
 
 	if len(o.Cluster.PodCIDRs) == 0 || len(o.Cluster.ServiceCIDRs) == 0 {

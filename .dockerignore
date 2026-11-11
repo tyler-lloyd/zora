@@ -1,0 +1,6 @@
+.git
+.github
+deploy
+coverage.out
+bin
+**/testdata

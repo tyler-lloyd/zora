@@ -1,0 +1,65 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "zora.agent" . }}
+  labels: {{- include "zora.labels" . | nindent 4 }}
+rules:
+  # Find the pod a sandbox belongs to; delete pods running without the
+  # tunnel they asked for (repair).
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, delete]
+  # Set the zora.io/wireguard-ready condition.
+  - apiGroups: [""]
+    resources: [pods/status]
+    verbs: [patch]
+  # Node addresses are kept out of every tunnel.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "zora.agent" . }}
+  labels: {{- include "zora.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "zora.agent" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "zora.agent" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# On shutdown the agent checks whether its DaemonSet still exists, to tell a
+# restart (stay installed) from an uninstall (clean up the node).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "zora.agent" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "zora.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [daemonsets]
+    resourceNames: [{{ include "zora.agent" . | quote }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "zora.agent" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "zora.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "zora.agent" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "zora.agent" . }}
+    namespace: {{ .Release.Namespace }}

@@ -10,9 +10,36 @@ zora is a *secondary* CNI plugin. It runs alongside whatever CNI your cluster
 already uses (flannel, Cilium, kindnet, Calico) and leaves pods that don't ask
 for a tunnel completely alone.
 
-> **Status: early.** The core is built and well tested, but there is no
-> container image or Helm chart yet, so you can't install it on a cluster
-> today. That is the next piece of work.
+> **Status: early.** zora has run on a real cluster (CRI-O with Cilium) and
+> in kind (containerd with kindnet), but there is no tagged release yet.
+> Expect rough edges.
+
+## Installing
+
+zora installs with Helm, from a checkout of this repository. You have to tell
+it your cluster's pod and Service ranges, and which namespaces may use it:
+
+```sh
+helm install zora deploy/helm/zora \
+  --namespace zora-system --create-namespace \
+  --set 'cluster.podCIDRs={10.244.0.0/16}' \
+  --set 'cluster.serviceCIDRs={10.96.0.0/12}' \
+  --set 'secrets.namespaces={default}'
+```
+
+zora can only read Secrets in the namespaces you list, so that is also the
+list of namespaces whose pods can get a tunnel.
+[`values.yaml`](deploy/helm/zora/values.yaml) describes the other settings.
+
+Nodes need Linux 5.6 or newer, for the built-in WireGuard module.
+
+**Cilium:** set `cni.exclusive=false` in Cilium's Helm values. Otherwise
+Cilium removes zora from the node's CNI config as soon as it is added. zora
+notices and backs off, but no pod will get a tunnel.
+
+To remove zora, run `helm uninstall zora -n zora-system`. It takes zora out of
+every node's CNI config before removing anything else. Pods that already have
+a tunnel keep it until they restart.
 
 ## What it looks like
 
