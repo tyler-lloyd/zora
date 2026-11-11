@@ -10,9 +10,9 @@ zora is a *secondary* CNI plugin. It runs alongside whatever CNI your cluster
 already uses (flannel, Cilium, kindnet, Calico) and leaves pods that don't ask
 for a tunnel completely alone.
 
-> **Status: early.** zora has run on a real cluster (CRI-O with Cilium) and
-> in kind (containerd with kindnet), but there is no tagged release yet.
-> Expect rough edges.
+> **Status: early.** v0.1.0 is the first release. zora has run on a real
+> cluster (CRI-O with Cilium) and is tested in kind with kindnet, flannel and
+> Cilium. Expect rough edges.
 
 ## Installing
 
@@ -20,6 +20,8 @@ zora installs with Helm, from a checkout of this repository. You have to tell
 it your cluster's pod address range, and which namespaces may use it:
 
 ```sh
+git clone --branch v0.1.0 https://github.com/tyler-lloyd/zora.git
+cd zora
 helm install zora deploy/helm/zora \
   --namespace zora-system --create-namespace \
   --set 'cluster.podCIDRs={10.244.0.0/16}' \
