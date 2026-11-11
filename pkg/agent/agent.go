@@ -20,10 +20,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 
@@ -112,6 +114,11 @@ type Agent struct {
 	// notInstalled is why zora is not chained in, for Ready.
 	notInstalled atomic.Pointer[string]
 	nodeIPs      atomic.Pointer[[]netip.Addr]
+	// serviceCIDRs is the Service range in use: configured, or detected.
+	serviceCIDRs atomic.Pointer[[]netip.Prefix]
+	// cidrProblem is set when the cluster ranges look wrong, for Ready.
+	cidrProblem atomic.Pointer[string]
+	pods        corelisters.PodLister
 	// Resolver is exposed for tests; nil until Run has started it.
 	Resolver *resolver.Resolver
 }
@@ -151,6 +158,9 @@ func (a *Agent) Ready() error {
 		}
 		return errors.New("not chained into the CNI config yet")
 	}
+	if why := a.cidrProblem.Load(); why != nil && *why != "" {
+		return errors.New(*why)
+	}
 	return nil
 }
 
@@ -181,7 +191,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: a.client.CoreV1().Events("")})
 	events := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "zora-agent", Host: o.NodeName})
 
-	a.refreshNodeIPs(ctx)
+	a.pods = podInformer.Lister()
+	a.refreshCluster(ctx)
+	if p := a.serviceCIDRs.Load(); p == nil || len(*p) == 0 {
+		return errors.New("the cluster's Service range could not be detected (that needs the ServiceCIDR API, Kubernetes 1.33 or newer); set --service-cidrs")
+	}
 	res := &resolver.Resolver{
 		Client: a.client, Pods: podInformer.Lister(), Synced: informer.HasSynced,
 		Events: events, DNS: net.DefaultResolver,
@@ -190,6 +204,12 @@ func (a *Agent) Run(ctx context.Context) error {
 			HostModeNamespaces: o.HostModeNamespaces,
 			NodeIPs: func() []netip.Addr {
 				if p := a.nodeIPs.Load(); p != nil {
+					return *p
+				}
+				return nil
+			},
+			ServiceCIDRs: func() []netip.Prefix {
+				if p := a.serviceCIDRs.Load(); p != nil {
 					return *p
 				}
 				return nil
@@ -259,7 +279,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		case err := <-serverErr:
 			return fmt.Errorf("plugin socket server stopped: %w", err)
 		case <-repairTick.C:
-			a.refreshNodeIPs(ctx)
+			a.refreshCluster(ctx)
 			outcomes, err := rep.RunOnce(ctx)
 			for _, oc := range outcomes {
 				a.log.Info("repair", "pod", oc.Pod, "action", oc.Action)
@@ -333,6 +353,86 @@ func (a *Agent) refreshNodeIPs(ctx context.Context) {
 		}
 	}
 	a.nodeIPs.Store(&ips)
+}
+
+// refreshCluster re-reads what the agent learns from the cluster: node
+// addresses and, where the API offers it, the Service range. It then checks
+// the configured ranges against what the cluster is actually using, because
+// a wrong range does not fail loudly: tunnelled pods just lose DNS, Services
+// or each other.
+func (a *Agent) refreshCluster(ctx context.Context) {
+	a.refreshNodeIPs(ctx)
+
+	// The ServiceCIDR API is authoritative where it exists (1.33+).
+	var detected []netip.Prefix
+	if list, err := a.client.NetworkingV1().ServiceCIDRs().List(ctx, metav1.ListOptions{}); err == nil {
+		for _, sc := range list.Items {
+			for _, c := range sc.Spec.CIDRs {
+				if p, err := netip.ParsePrefix(c); err == nil {
+					detected = append(detected, p.Masked())
+				}
+			}
+		}
+	}
+	configured := a.opts.Cluster.ServiceCIDRs
+	switch {
+	case len(configured) > 0:
+		a.serviceCIDRs.Store(&configured)
+	case len(detected) > 0:
+		a.serviceCIDRs.Store(&detected)
+	}
+
+	problem := a.checkRanges(configured, detected)
+	if last := a.cidrProblem.Swap(&problem); problem != "" && (last == nil || *last != problem) {
+		a.log.Error("cluster ranges look wrong", "problem", problem)
+	}
+}
+
+// checkRanges returns a description of the first way the configured ranges
+// disagree with the cluster, or "".
+func (a *Agent) checkRanges(configuredServices, detectedServices []netip.Prefix) string {
+	covered := func(ranges []netip.Prefix, p netip.Prefix) bool {
+		for _, r := range ranges {
+			if r.Bits() <= p.Bits() && r.Contains(p.Addr()) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(configuredServices) > 0 {
+		for _, d := range detectedServices {
+			if !covered(configuredServices, d) {
+				return fmt.Sprintf("the cluster's Service range %s is not covered by the configured Service CIDRs %v: "+
+					"tunnelled pods would lose those Services; fix the setting, or remove it to use the detected range",
+					d, configuredServices)
+			}
+		}
+	}
+	if a.pods == nil {
+		return ""
+	}
+	pods, err := a.pods.List(labels.Everything())
+	if err != nil {
+		return ""
+	}
+	for _, pod := range pods {
+		if pod.Spec.HostNetwork {
+			continue // has the node's address, not a pod address
+		}
+		for _, ip := range pod.Status.PodIPs {
+			addr, err := netip.ParseAddr(ip.IP)
+			if err != nil {
+				continue
+			}
+			addr = addr.Unmap()
+			if !covered(a.opts.Cluster.PodCIDRs, netip.PrefixFrom(addr, addr.BitLen())) {
+				return fmt.Sprintf("pod %s/%s has address %s, which is outside the configured pod CIDRs %v: "+
+					"tunnelled pods would send traffic for such pods into their tunnel; fix the pod CIDR setting",
+					pod.Namespace, pod.Name, addr, a.opts.Cluster.PodCIDRs)
+			}
+		}
+	}
+	return ""
 }
 
 // shutdown decides whether this is an uninstall. A rolling update or node

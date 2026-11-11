@@ -17,15 +17,20 @@ for a tunnel completely alone.
 ## Installing
 
 zora installs with Helm, from a checkout of this repository. You have to tell
-it your cluster's pod and Service ranges, and which namespaces may use it:
+it your cluster's pod address range, and which namespaces may use it:
 
 ```sh
 helm install zora deploy/helm/zora \
   --namespace zora-system --create-namespace \
   --set 'cluster.podCIDRs={10.244.0.0/16}' \
-  --set 'cluster.serviceCIDRs={10.96.0.0/12}' \
   --set 'secrets.namespaces={default}'
 ```
+
+On Kubernetes older than 1.33, also pass your Service range, for example
+`--set 'cluster.serviceCIDRs={10.96.0.0/12}'`. Newer clusters are asked for it.
+
+If a range doesn't match the cluster, the agents say so and stay not-ready,
+so check `kubectl -n zora-system get pods` after installing.
 
 zora can only read Secrets in the namespaces you list, so that is also the
 list of namespaces whose pods can get a tunnel.

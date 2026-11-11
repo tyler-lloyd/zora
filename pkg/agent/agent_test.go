@@ -14,6 +14,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -50,6 +51,15 @@ type node struct {
 // DaemonSet.
 func start(t *testing.T, withPrimary bool) *node {
 	t.Helper()
+	n := prepare(t, withPrimary, nil)
+	n.run()
+	return n
+}
+
+// prepare builds the node without starting the agent. mutate may change the
+// options and add objects to the fake API server.
+func prepare(t *testing.T, withPrimary bool, mutate func(*Options, *[]runtime.Object)) *node {
+	t.Helper()
 	dir := t.TempDir()
 	n := &node{
 		t: t, confDir: filepath.Join(dir, "net.d"), binDir: filepath.Join(dir, "bin"),
@@ -71,7 +81,7 @@ func start(t *testing.T, withPrimary bool) *node {
 	}
 	wg := "[Interface]\nPrivateKey = " + ifaceKey + "\nAddress = 100.64.0.2/32\n[Peer]\nPublicKey = " + peerKey +
 		"\nAllowedIPs = 0.0.0.0/0\nEndpoint = 203.0.113.7:51820\n"
-	n.client = fake.NewClientset(
+	objs := []runtime.Object{
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
 			{Type: corev1.NodeInternalIP, Address: "172.18.0.2"}, {Type: corev1.NodeHostName, Address: "node-1"},
 		}}},
@@ -83,8 +93,8 @@ func start(t *testing.T, withPrimary bool) *node {
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "wg"},
 			Data: map[string][]byte{agentapi.DefaultSecretKey: []byte(wg)}},
 		&appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "zora-system", Name: "zora-agent"}},
-	)
-	n.agent, err = New(Options{
+	}
+	opts := Options{
 		NodeName: "node-1", Socket: n.socket, CNIConfDir: n.confDir, CNIBinDir: n.binDir, PluginSource: src,
 		Cluster: plan.ClusterInfo{
 			PodCIDRs:     []netip.Prefix{netip.MustParsePrefix("10.244.0.0/16")},
@@ -92,15 +102,123 @@ func start(t *testing.T, withPrimary bool) *node {
 		},
 		Resync: 50 * time.Millisecond, RepairInterval: 50 * time.Millisecond,
 		DaemonSetNamespace: "zora-system", DaemonSetName: "zora-agent",
-	}, n.client, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}
+	if mutate != nil {
+		mutate(&opts, &objs)
+	}
+	n.client = fake.NewClientset(objs...)
+	n.agent, err = New(opts, n.client, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
+	return n
+}
+
+func (n *node) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	n.cancel = cancel
 	go func() { n.done <- n.agent.Run(ctx) }()
-	t.Cleanup(func() { _ = n.stop() })
-	return n
+	n.t.Cleanup(func() { _ = n.stop() })
+}
+
+func serviceCIDR(cidrs ...string) *networkingv1.ServiceCIDR {
+	return &networkingv1.ServiceCIDR{ObjectMeta: metav1.ObjectMeta{Name: "kubernetes"}, Spec: networkingv1.ServiceCIDRSpec{CIDRs: cidrs}}
+}
+
+func carveOuts(t *testing.T, n *node) map[string]bool {
+	t.Helper()
+	resp, err := agentapi.NewClient(n.socket, 5*time.Second).Resolve(context.Background(),
+		agentapi.ResolveRequest{Pod: agentapi.Pod{Namespace: "apps", Name: "vpn", UID: "uid-vpn"}, ContainerID: "c1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for _, r := range resp.Plan.Rules {
+		if r.Dst != nil {
+			out[r.Dst.String()] = true
+		}
+	}
+	return out
+}
+
+func TestServiceRangeIsDetectedWhenNotConfigured(t *testing.T) {
+	n := prepare(t, true, func(o *Options, objs *[]runtime.Object) {
+		o.Cluster.ServiceCIDRs = nil
+		*objs = append(*objs, serviceCIDR("172.16.0.0/16", "fd00:96::/112"))
+	})
+	n.run()
+	n.waitReady()
+	if c := carveOuts(t, n); !c["172.16.0.0/16"] || c["10.96.0.0/12"] {
+		t.Fatalf("carve-outs = %v; want the detected Service range", c)
+	}
+}
+
+func TestRefusesToStartWithoutAServiceRange(t *testing.T) {
+	// An older cluster: no ServiceCIDR objects, and nothing configured.
+	n := prepare(t, true, func(o *Options, _ *[]runtime.Object) { o.Cluster.ServiceCIDRs = nil })
+	err := n.agent.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--service-cidrs") {
+		t.Fatalf("Run = %v; want it to refuse and name the setting", err)
+	}
+	if n.chained() {
+		t.Fatal("chained in without knowing the Service range")
+	}
+}
+
+// A wrong range does not fail loudly on its own: pods just lose DNS or each
+// other. The agent must notice and say so through its readiness.
+func TestReportsRangesThatDisagreeWithTheCluster(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(*Options, *[]runtime.Object)
+		want   string
+	}{
+		"configured Service range misses the real one": {
+			func(_ *Options, objs *[]runtime.Object) { *objs = append(*objs, serviceCIDR("172.16.0.0/16")) },
+			"Service range 172.16.0.0/16 is not covered",
+		},
+		"a pod's address is outside the pod CIDRs": {
+			func(_ *Options, objs *[]runtime.Object) {
+				*objs = append(*objs, &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "web"}, Spec: corev1.PodSpec{NodeName: "node-1"},
+					Status: corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "100.100.2.7"}}},
+				})
+			},
+			"pod apps/web has address 100.100.2.7, which is outside the configured pod CIDRs",
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			n := prepare(t, true, c.mutate)
+			n.run()
+			var err error
+			for range 200 {
+				if err = n.agent.Ready(); err != nil && strings.Contains(err.Error(), c.want) {
+					return
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			t.Fatalf("Ready() = %v; want an error containing %q", err, c.want)
+		})
+	}
+}
+
+func TestRangesThatAgreeAreNotReported(t *testing.T) {
+	n := prepare(t, true, func(_ *Options, objs *[]runtime.Object) {
+		*objs = append(*objs,
+			serviceCIDR("10.96.0.0/16"), // inside the configured /12
+			&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "web"}, Spec: corev1.PodSpec{NodeName: "node-1"},
+				Status: corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "10.244.1.7"}}}},
+			// Host-network pods carry the node's address; that is not a pod address.
+			&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "etcd"}, Spec: corev1.PodSpec{NodeName: "node-1", HostNetwork: true},
+				Status: corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "172.18.0.2"}}}},
+		)
+	})
+	n.run()
+	n.waitReady()
+	time.Sleep(200 * time.Millisecond) // several refreshes
+	if err := n.agent.Ready(); err != nil {
+		t.Fatalf("Ready() = %v", err)
+	}
 }
 
 func (n *node) writePrimary() {

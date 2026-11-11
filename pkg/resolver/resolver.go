@@ -62,6 +62,9 @@ type Config struct {
 	Cluster plan.ClusterInfo
 	// NodeIPs returns the addresses of the cluster's nodes. May be nil.
 	NodeIPs func() []netip.Addr
+	// ServiceCIDRs, when set, replaces Cluster.ServiceCIDRs at each
+	// Resolve (the agent may detect the range from the cluster).
+	ServiceCIDRs func() []netip.Prefix
 	// HostModeNamespaces are the namespaces whose pods may use host mode,
 	// which lets encrypted traffic bypass NetworkPolicy. A pod annotation
 	// alone never enables it.
@@ -138,6 +141,9 @@ func (r *Resolver) plan(ctx context.Context, pod *corev1.Pod, req agentapi.Resol
 	}
 	if r.Config.NodeIPs != nil {
 		in.Cluster.NodeIPs = r.Config.NodeIPs()
+	}
+	if r.Config.ServiceCIDRs != nil {
+		in.Cluster.ServiceCIDRs = r.Config.ServiceCIDRs()
 	}
 	switch mode := ann[agentapi.AnnotationMode]; mode {
 	case "", ModePod:
