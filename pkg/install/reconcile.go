@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"time"
@@ -163,6 +164,12 @@ func (r *Reconciler) Reconcile() (Status, error) {
 	primary := cfgs[0]
 	st := Status{Primary: primary}
 	data, err := r.FS.ReadFile(filepath.Join(r.Dir, primary))
+	if errors.Is(err, fs.ErrNotExist) {
+		// Removed between listing and reading: its owner is replacing
+		// it. The next event or resync sees the result.
+		st.Reason = fmt.Sprintf("%s changed while it was being read, retrying", primary)
+		return st, nil
+	}
 	if err != nil {
 		return st, err
 	}

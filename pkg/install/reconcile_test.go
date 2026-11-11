@@ -292,6 +292,24 @@ func TestLeavesAnInvalidPrimaryAlone(t *testing.T) {
 	}
 }
 
+// vanishingFS lists a file that is gone by the time it is read, as happens
+// when a primary CNI replaces its config by removing and re-creating it.
+type vanishingFS struct{ *memFS }
+
+func (v vanishingFS) ReadFile(string) ([]byte, error) { return nil, fs.ErrNotExist }
+
+func TestToleratesThePrimaryVanishingMidPass(t *testing.T) {
+	m := newMemFS(map[string]string{"10-flannel.conflist": fixture(t, "flannel.conflist")})
+	r := &Reconciler{Dir: dir, Entry: testEntry, FS: vanishingFS{m}}
+	st, err := r.Reconcile()
+	if err != nil || st.Installed || !strings.Contains(st.Reason, "retrying") {
+		t.Fatalf("status = %+v, err = %v; want a quiet retry", st, err)
+	}
+	if w := m.takeWrites(); len(w) != 0 {
+		t.Fatalf("wrote %v", w)
+	}
+}
+
 func TestIgnoresFilesTheRuntimeIgnores(t *testing.T) {
 	m := newMemFS(map[string]string{
 		"10-flannel.conflist":            fixture(t, "flannel.conflist"),
@@ -378,12 +396,21 @@ func TestRunOnARealDirectory(t *testing.T) {
 	}
 	statuses := make(chan Status, 100)
 	r := &Reconciler{Dir: d, Entry: testEntry, FS: OSFS{}}
-	go r.Run(ctx, events, nil, func(st Status, err error) {
-		if err != nil {
-			t.Errorf("reconcile: %v", err)
-		}
-		statuses <- st
-	})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		r.Run(ctx, events, nil, func(st Status, err error) {
+			if err != nil {
+				t.Errorf("reconcile: %v", err)
+			}
+			statuses <- st
+		})
+	}()
+	// Stop the loop before the temp directory is removed under it.
+	defer func() {
+		cancel()
+		<-stopped
+	}()
 	waitFor := func(what string, cond func(Status) bool) {
 		t.Helper()
 		deadline := time.After(10 * time.Second)

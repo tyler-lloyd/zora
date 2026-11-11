@@ -14,7 +14,7 @@ and every bug fix ships with a regression test that fails without the fix.
 | 2 | `make fuzz` | Go | parser contracts on arbitrary input |
 | 3 | `make test-netns` | Linux + `wireguard` module + unprivileged user namespaces (or root) | plans applied to real network namespaces, real tunnel traffic |
 | 4 | `make test-integration` | as tier 3 | the real `zora-cni` binary, run by `libcni` after the reference `bridge`/`ptp` + `host-local` plugins |
-| 5 | `make e2e CNI=kindnet\|flannel\|cilium` *(planned)* | Docker + kind | full behaviour in a cluster |
+| 5 | `make e2e-smoke` | Docker, kind, kubectl, helm | the image and Helm chart in a kind cluster: install, a pod gets its interface, a plain pod doesn't, a bad annotation is explained, restart, uninstall |
 
 Tiers 0-2 need no root and no cluster, and they cover most of the logic: the
 packages that make decisions (`wgconfig`, `plan`) are pure functions on

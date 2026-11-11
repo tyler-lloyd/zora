@@ -1,0 +1,97 @@
+{{- if or (empty .Values.cluster.podCIDRs) (empty .Values.cluster.serviceCIDRs) }}
+{{- fail "cluster.podCIDRs and cluster.serviceCIDRs are required: without them a tunnelled pod would lose cluster DNS, Services and health checks. Example: --set 'cluster.podCIDRs={10.244.0.0/16}' --set 'cluster.serviceCIDRs={10.96.0.0/12}'" }}
+{{- end }}
+{{- if not (has .Values.repair.action (list "delete" "event" "none")) }}
+{{- fail "repair.action must be delete, event or none" }}
+{{- end }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "zora.agent" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "zora.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "zora.selectorLabels" . | nindent 6 }}
+  updateStrategy: {{- toYaml .Values.updateStrategy | nindent 4 }}
+  template:
+    metadata:
+      labels:
+        {{- include "zora.labels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "zora.agent" . }}
+      # The agent must not depend on the pod network it helps set up.
+      hostNetwork: true
+      # Still resolve cluster names, so WireGuard endpoints can be Services.
+      dnsPolicy: ClusterFirstWithHostNet
+      priorityClassName: {{ .Values.priorityClassName }}
+      # Time for the agent to uninstall from the node when the chart is removed.
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agent
+          image: {{ include "zora.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - run
+            - --pod-cidrs={{ join "," .Values.cluster.podCIDRs }}
+            - --service-cidrs={{ join "," .Values.cluster.serviceCIDRs }}
+            {{- with .Values.cluster.extraExcludes }}
+            - --extra-excludes={{ join "," . }}
+            {{- end }}
+            - --exclude-namespaces={{ include "zora.excludeNamespaces" . }}
+            {{- with .Values.hostModeNamespaces }}
+            - --host-mode-namespaces={{ join "," . }}
+            {{- end }}
+            - --repair-action={{ .Values.repair.action }}
+            - --repair-grace={{ .Values.repair.grace }}
+            - --health-addr=127.0.0.1:{{ .Values.healthPort }}
+            - --daemonset-name={{ include "zora.agent" . }}
+          env:
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+          readinessProbe:
+            httpGet: {host: 127.0.0.1, port: {{ .Values.healthPort }}, path: /readyz}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {host: 127.0.0.1, port: {{ .Values.healthPort }}, path: /healthz}
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            # Root, to write the node's root-owned CNI directories, but with
+            # no capabilities: the agent does no network configuration (the
+            # CNI plugin does, when the container runtime runs it).
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            # Lets the agent write host directories on SELinux-enforcing nodes.
+            seLinuxOptions:
+              type: spc_t
+          volumeMounts:
+            - {name: cni-conf, mountPath: /host/etc/cni/net.d}
+            - {name: cni-bin, mountPath: /host/opt/cni/bin}
+            - {name: run, mountPath: /var/run/zora}
+      volumes:
+        - name: cni-conf
+          hostPath: {path: {{ .Values.cni.confDir }}, type: DirectoryOrCreate}
+        - name: cni-bin
+          hostPath: {path: {{ .Values.cni.binDir }}, type: DirectoryOrCreate}
+        # The plugin, running on the host, reaches the agent here.
+        - name: run
+          hostPath: {path: /var/run/zora, type: DirectoryOrCreate}

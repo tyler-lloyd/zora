@@ -1,0 +1,68 @@
+# Required. Traffic to these ranges never enters a pod's tunnel, so tunnelled
+# pods can still reach other pods, Services and cluster DNS. Getting them
+# wrong breaks DNS and health checks for tunnelled pods.
+cluster:
+  # Your cluster's pod CIDR(s), e.g. ["10.244.0.0/16"].
+  podCIDRs: []
+  # Your cluster's Service CIDR(s), e.g. ["10.96.0.0/12"].
+  serviceCIDRs: []
+  # Anything else to keep out of tunnels, e.g. a NodeLocal DNSCache address
+  # ["169.254.20.10/32"]. Node addresses are kept out automatically.
+  extraExcludes: []
+
+# zora can only read Secrets where it has been allowed to. List the
+# namespaces whose pods may use it; the chart creates a RoleBinding in each
+# (the namespaces must already exist).
+secrets:
+  namespaces: []
+  # Or let zora read Secrets in every namespace. Simpler, but a much wider
+  # permission.
+  allNamespaces: false
+
+# Pods in these namespaces never go through zora, so they keep starting even
+# if zora is broken. The release's own namespace is always excluded.
+excludeNamespaces:
+  - kube-system
+
+# Namespaces whose pods may ask for host mode (zora.io/wireguard-mode: host),
+# which sends encrypted traffic from the node and so bypasses NetworkPolicy.
+hostModeNamespaces: []
+
+# What to do with a pod that asked for a tunnel but is running without one
+# (its sandbox was created while zora wasn't installed on the node):
+# "delete" lets its controller recreate it, "event" only reports it, "none"
+# does nothing.
+repair:
+  action: delete
+  grace: 1m
+
+# Where the node keeps its CNI config and plugins. k3s and RKE2 use
+# /var/lib/rancher/k3s/agent/etc/cni/net.d and /var/lib/rancher/k3s/data/current/bin.
+cni:
+  confDir: /etc/cni/net.d
+  binDir: /opt/cni/bin
+
+image:
+  repository: ghcr.io/tyler-lloyd/zora
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The agent listens for health checks on 127.0.0.1 on each node.
+healthPort: 9809
+
+# Run everywhere by default: a node without the agent gives pods no tunnels.
+nodeSelector: {}
+tolerations:
+  - operator: Exists
+priorityClassName: system-node-critical
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+updateStrategy:
+  type: RollingUpdate
+podAnnotations: {}

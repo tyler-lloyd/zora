@@ -1,0 +1,10 @@
+apiVersion: v2
+name: zora
+description: Per-pod WireGuard tunnels, as a CNI plugin chained after your cluster's CNI
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/tyler-lloyd/zora
+sources:
+  - https://github.com/tyler-lloyd/zora
+kubeVersion: ">=1.27.0-0"

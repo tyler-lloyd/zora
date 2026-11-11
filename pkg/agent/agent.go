@@ -356,12 +356,42 @@ func (a *Agent) daemonSetGone(ctx context.Context) bool {
 		return false
 	}
 	ds, err := a.client.AppsV1().DaemonSets(a.opts.DaemonSetNamespace).Get(ctx, a.opts.DaemonSetName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
+	// Losing our own permissions means the same as the DaemonSet being
+	// gone: `helm uninstall`, `kubectl delete -f` and namespace deletion
+	// remove the RBAC and ServiceAccount alongside the DaemonSet, often
+	// before this question is asked.
+	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 		return true
 	}
-	// If the API server can't be asked, assume a restart: leaving zora
+	// If the API server can't be reached, assume a restart: leaving zora
 	// installed is recoverable, removing it from a healthy node is not.
 	return err == nil && ds.DeletionTimestamp != nil
+}
+
+// RemoveDaemonSet deletes the agent's DaemonSet and waits until its pods
+// have gone, each having uninstalled zora from its node on the way out. It
+// is the chart's pre-delete hook: run before the rest of the release (RBAC
+// included) is deleted, it lets every agent see plainly that the DaemonSet
+// is going away.
+func RemoveDaemonSet(ctx context.Context, client kubernetes.Interface, namespace, name string, poll time.Duration) error {
+	// Foreground deletion keeps the DaemonSet (marked as deleting) until
+	// its pods are gone, so its disappearance means they have finished.
+	policy := metav1.DeletePropagationForeground
+	err := client.AppsV1().DaemonSets(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &policy})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("deleting DaemonSet %s/%s: %w", namespace, name, err)
+	}
+	for {
+		_, err := client.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for DaemonSet %s/%s and its pods to go: %w", namespace, name, ctx.Err())
+		case <-time.After(poll):
+		}
+	}
 }
 
 // Uninstall removes zora from the node's CNI config, then removes the
