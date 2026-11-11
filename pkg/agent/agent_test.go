@@ -70,6 +70,9 @@ func start(t *testing.T, withPrimary bool) *node {
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
 			{Type: corev1.NodeInternalIP, Address: "172.18.0.2"}, {Type: corev1.NodeHostName, Address: "node-1"},
 		}}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-2"}, Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+			{Type: corev1.NodeInternalIP, Address: "172.18.0.3"},
+		}}},
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "vpn", UID: "uid-vpn",
 			Annotations: map[string]string{agentapi.AnnotationSecret: "wg"}}, Spec: corev1.PodSpec{NodeName: "node-1"}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "wg"},
@@ -158,14 +161,17 @@ func TestAgentServesAndStaysInstalledAcrossRestarts(t *testing.T) {
 	if err != nil || resp.Action != agentapi.ActionConfigure {
 		t.Fatalf("resolve: %+v, %v", resp, err)
 	}
-	nodeIPCarvedOut := false
+	// Every node's address stays out of the tunnel, not only this node's:
+	// on a real cluster, a Service backed by host-network pods on other
+	// nodes (the API server) was unreachable from a tunnelled pod.
+	carved := map[string]bool{}
 	for _, r := range resp.Plan.Rules {
-		if r.Dst != nil && r.Dst.String() == "172.18.0.2/32" {
-			nodeIPCarvedOut = true
+		if r.Dst != nil {
+			carved[r.Dst.String()] = true
 		}
 	}
-	if !nodeIPCarvedOut {
-		t.Error("the node's IP (read from the Node object) is not kept out of the tunnel")
+	if !carved["172.18.0.2/32"] || !carved["172.18.0.3/32"] {
+		t.Errorf("node addresses are not kept out of the tunnel: carve-outs = %v", carved)
 	}
 	if err := c.Report(ctx, agentapi.ReportRequest{Pod: ref, ContainerID: "c1", OK: true}); err != nil {
 		t.Fatal(err)

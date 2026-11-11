@@ -146,6 +146,71 @@ func TestReinsertsAfterThePrimaryRewritesItsConfig(t *testing.T) {
 	}
 }
 
+// TestBacksOffWhenAnotherProcessKeepsReverting models Cilium with
+// cni.exclusive=true, which regenerates its config on any activity in the
+// directory. On a real cluster this was a write loop of ~16 rewrites per
+// second between the two daemons.
+func TestBacksOffWhenAnotherProcessKeepsReverting(t *testing.T) {
+	orig := fixture(t, "cilium.conflist")
+	m := newMemFS(map[string]string{"05-cilium.conflist": orig})
+	clock := time.Date(2026, 11, 11, 3, 0, 0, 0, time.UTC)
+	r := newReconciler(m)
+	r.Now = func() time.Time { return clock }
+	guarding := true
+	// pass runs one reconcile, then lets the other daemon react.
+	pass := func() Status {
+		st := reconcile(t, r)
+		if guarding {
+			m.put("05-cilium.conflist", orig)
+		}
+		clock = clock.Add(60 * time.Millisecond)
+		return st
+	}
+	writes := func() int { return len(m.takeWrites()) }
+
+	var st Status
+	for range 1000 { // a minute of fsnotify-driven passes
+		st = pass()
+	}
+	if n := writes(); n > maxReverts {
+		t.Fatalf("%d writes while being reverted; want at most %d before backing off", n, maxReverts)
+	}
+	if st.Installed || !strings.Contains(st.Reason, "keeps removing zora") || !strings.Contains(st.Reason, "cni.exclusive=false") {
+		t.Fatalf("status = %+v; it must say what is happening and how to fix it", st)
+	}
+
+	// After the delay it tries once; still reverted, so it waits longer.
+	clock = clock.Add(initialBackoff)
+	for range 100 { // six seconds
+		pass()
+	}
+	if n := writes(); n != 1 {
+		t.Fatalf("%d writes after the first backoff, want exactly one retry", n)
+	}
+	clock = clock.Add(initialBackoff + time.Second)
+	for range 100 {
+		pass()
+	}
+	if n := writes(); n != 0 {
+		t.Fatalf("%d writes; the second backoff must be longer than the first", n)
+	}
+
+	// The admin fixes the primary's settings: zora gets in and stays.
+	guarding = false
+	clock = clock.Add(2 * initialBackoff)
+	if st = pass(); !st.Installed {
+		t.Fatalf("status = %+v", st)
+	}
+	clock = clock.Add(revertWindow)
+	pass()
+	// A single rewrite much later (the primary restarting) is not a
+	// fight: zora re-inserts at once, with the backoff forgotten.
+	m.put("05-cilium.conflist", orig)
+	if st = pass(); !st.Installed || r.backoff != 0 {
+		t.Fatalf("status = %+v, backoff = %s", st, r.backoff)
+	}
+}
+
 func TestFollowsANewPrimary(t *testing.T) {
 	t.Run("cilium exclusive mode renames the old config", func(t *testing.T) {
 		m := newMemFS(map[string]string{"10-flannel.conflist": fixture(t, "flannel.conflist")})

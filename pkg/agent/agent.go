@@ -109,7 +109,9 @@ type Agent struct {
 	synced    atomic.Bool
 	serving   atomic.Bool
 	installed atomic.Bool
-	nodeIPs   atomic.Pointer[[]netip.Addr]
+	// notInstalled is why zora is not chained in, for Ready.
+	notInstalled atomic.Pointer[string]
+	nodeIPs      atomic.Pointer[[]netip.Addr]
 	// Resolver is exposed for tests; nil until Run has started it.
 	Resolver *resolver.Resolver
 }
@@ -144,6 +146,9 @@ func (a *Agent) Ready() error {
 	case !a.serving.Load():
 		return errors.New("not serving the plugin socket yet")
 	case !a.installed.Load():
+		if why := a.notInstalled.Load(); why != nil && *why != "" {
+			return fmt.Errorf("not chained into the CNI config: %s", *why)
+		}
 		return errors.New("not chained into the CNI config yet")
 	}
 	return nil
@@ -271,6 +276,7 @@ func (a *Agent) reconcile(ctx context.Context, watch <-chan struct{}, resync <-c
 	o := a.opts
 	a.reconciler().Run(ctx, watch, resync, func(st install.Status, err error) {
 		a.installed.Store(err == nil && st.Installed)
+		a.notInstalled.Store(&st.Reason)
 		// The binary can be removed behind our back too.
 		if _, berr := install.InstallBinary(o.PluginSource, a.pluginPath()); berr != nil {
 			a.log.Error("re-installing the CNI plugin", "err", berr)
@@ -301,10 +307,14 @@ func (a *Agent) healthHandler() http.Handler {
 	return mux
 }
 
-// refreshNodeIPs reads the node's addresses, which pods must keep reaching
-// outside their tunnel (the kubelet probes from them).
+// refreshNodeIPs reads the addresses of every node in the cluster, which
+// pods must keep reaching outside their tunnel. The pod's own node probes it
+// from them. The other nodes matter too: Services backed by host-network
+// pods (the API server, for one) have node addresses as backends, and a
+// kube-proxy replacement that translates at connect time (Cilium's) hands
+// the pod's routing table the backend address, not the Service address.
 func (a *Agent) refreshNodeIPs(ctx context.Context) {
-	node, err := a.client.CoreV1().Nodes().Get(ctx, a.opts.NodeName, metav1.GetOptions{})
+	nodes, err := a.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if ctx.Err() == nil {
 			a.log.Warn("reading node addresses", "err", err)
@@ -312,12 +322,14 @@ func (a *Agent) refreshNodeIPs(ctx context.Context) {
 		return
 	}
 	var ips []netip.Addr
-	for _, addr := range node.Status.Addresses {
-		if addr.Type != corev1.NodeInternalIP && addr.Type != corev1.NodeExternalIP {
-			continue
-		}
-		if ip, err := netip.ParseAddr(addr.Address); err == nil {
-			ips = append(ips, ip.Unmap())
+	for _, node := range nodes.Items {
+		for _, addr := range node.Status.Addresses {
+			if addr.Type != corev1.NodeInternalIP && addr.Type != corev1.NodeExternalIP {
+				continue
+			}
+			if ip, err := netip.ParseAddr(addr.Address); err == nil {
+				ips = append(ips, ip.Unmap())
+			}
 		}
 	}
 	a.nodeIPs.Store(&ips)

@@ -60,7 +60,7 @@ type Config struct {
 	// Cluster lists the ranges that must stay out of every tunnel.
 	// NodeIPs is filled from NodeIPs at each Resolve.
 	Cluster plan.ClusterInfo
-	// NodeIPs returns this node's addresses. May be nil.
+	// NodeIPs returns the addresses of the cluster's nodes. May be nil.
 	NodeIPs func() []netip.Addr
 	// HostModeNamespaces are the namespaces whose pods may use host mode,
 	// which lets encrypted traffic bypass NetworkPolicy. A pod annotation

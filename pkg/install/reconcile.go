@@ -51,11 +51,84 @@ type Status struct {
 	Wrote []string `json:"wrote,omitempty"`
 }
 
-// Reconciler keeps zora chained into the runtime's CNI config.
+// Contention limits. Some primaries rewrite their config once, when they
+// start; zora re-inserts itself and that is the end of it. Others guard the
+// file continuously (Cilium with cni.exclusive=true regenerates it on any
+// activity in the directory) and would revert zora forever. Re-inserting
+// each time would be a tight write loop between two daemons, so after a few
+// quick reverts zora stops and retries with a growing delay.
+const (
+	// revertWindow: losing the entry this soon after writing it counts as
+	// being reverted rather than as an unrelated rewrite.
+	revertWindow = 10 * time.Second
+	// maxReverts quick reverts in a row trigger a backoff.
+	maxReverts     = 3
+	initialBackoff = time.Minute
+	maxBackoff     = 30 * time.Minute
+)
+
+// Reconciler keeps zora chained into the runtime's CNI config. It is not
+// safe for concurrent use.
 type Reconciler struct {
 	Dir   string
 	Entry Entry
 	FS    FS
+	// Now is the clock; nil means time.Now.
+	Now func() time.Time
+
+	lastWrite time.Time // when we last wrote the primary
+	reverts   int       // quick reverts in a row
+	backoff   time.Duration
+	retryAt   time.Time // no writes to the primary before this
+}
+
+func (r *Reconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+// contested decides whether a needed write to the primary must wait. It
+// returns a reason when it must.
+func (r *Reconciler) contested(primary string) string {
+	now := r.now()
+	if now.Before(r.retryAt) {
+		return r.contestedReason(primary)
+	}
+	if !r.lastWrite.IsZero() && now.Sub(r.lastWrite) < revertWindow {
+		r.reverts++
+	} else if !r.retryAt.IsZero() {
+		// The retry after a backoff: one more revert backs off again.
+		r.reverts = maxReverts - 1
+		r.retryAt = time.Time{}
+	} else {
+		r.reverts = 0
+	}
+	if r.reverts < maxReverts {
+		return ""
+	}
+	if r.backoff == 0 {
+		r.backoff = initialBackoff
+	} else {
+		r.backoff = min(r.backoff*2, maxBackoff)
+	}
+	r.retryAt = now.Add(r.backoff)
+	return r.contestedReason(primary)
+}
+
+func (r *Reconciler) contestedReason(primary string) string {
+	return fmt.Sprintf("something keeps removing zora from %s right after it is added, so zora has stopped re-adding it until %s; "+
+		"if the primary CNI is Cilium, set cni.exclusive=false so it stops reverting changes to its config",
+		primary, r.retryAt.UTC().Format(time.RFC3339))
+}
+
+// settled notes that the primary needed no write. Once the entry has
+// survived the revert window, the contention state is cleared.
+func (r *Reconciler) settled() {
+	if r.lastWrite.IsZero() || r.now().Sub(r.lastWrite) >= revertWindow {
+		r.reverts, r.backoff, r.retryAt = 0, 0, time.Time{}
+	}
 }
 
 func (r *Reconciler) configFiles() ([]string, error) {
@@ -123,6 +196,14 @@ func (r *Reconciler) Reconcile() (Status, error) {
 		}
 	}
 
+	needsWrite := name != primary || !bytes.Equal(out, data)
+	if !needsWrite {
+		r.settled()
+	} else if reason := r.contested(primary); reason != "" {
+		st.Reason = reason
+		return st, nil
+	}
+
 	if name != primary {
 		// Converted .conf: write the .conflist, then remove the .conf. In
 		// between, the .conf still sorts first, so the runtime keeps using
@@ -134,11 +215,14 @@ func (r *Reconciler) Reconcile() (Status, error) {
 			return st, err
 		}
 		st.Wrote = append(st.Wrote, name, primary)
-	} else if !bytes.Equal(out, data) {
+	} else if needsWrite {
 		if err := r.FS.WriteFile(filepath.Join(r.Dir, name), out); err != nil {
 			return st, err
 		}
 		st.Wrote = append(st.Wrote, name)
+	}
+	if needsWrite {
+		r.lastWrite = r.now()
 	}
 	st.Primary, st.Installed = name, true
 	return st, nil
