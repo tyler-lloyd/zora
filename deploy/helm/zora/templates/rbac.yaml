@@ -17,6 +17,10 @@ rules:
   - apiGroups: [""]
     resources: [nodes]
     verbs: [list]
+  # The Service range is kept out of every tunnel (Kubernetes 1.33+).
+  - apiGroups: [networking.k8s.io]
+    resources: [servicecidrs]
+    verbs: [list]
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]

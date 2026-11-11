@@ -1,5 +1,8 @@
-{{- if or (empty .Values.cluster.podCIDRs) (empty .Values.cluster.serviceCIDRs) }}
-{{- fail "cluster.podCIDRs and cluster.serviceCIDRs are required: without them a tunnelled pod would lose cluster DNS, Services and health checks. Example: --set 'cluster.podCIDRs={10.244.0.0/16}' --set 'cluster.serviceCIDRs={10.96.0.0/12}'" }}
+{{- if empty .Values.cluster.podCIDRs }}
+{{- fail "cluster.podCIDRs is required: without it a tunnelled pod would send traffic for other pods into its tunnel. Example: --set 'cluster.podCIDRs={10.244.0.0/16}'" }}
+{{- end }}
+{{- if and (empty .Values.cluster.serviceCIDRs) (semverCompare "<1.33.0-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "cluster.serviceCIDRs is required on Kubernetes older than 1.33, where zora cannot read it from the cluster. Example: --set 'cluster.serviceCIDRs={10.96.0.0/12}'" }}
 {{- end }}
 {{- if not (has .Values.repair.action (list "delete" "event" "none")) }}
 {{- fail "repair.action must be delete, event or none" }}
@@ -47,7 +50,9 @@ spec:
           args:
             - run
             - --pod-cidrs={{ join "," .Values.cluster.podCIDRs }}
-            - --service-cidrs={{ join "," .Values.cluster.serviceCIDRs }}
+            {{- with .Values.cluster.serviceCIDRs }}
+            - --service-cidrs={{ join "," . }}
+            {{- end }}
             {{- with .Values.cluster.extraExcludes }}
             - --extra-excludes={{ join "," . }}
             {{- end }}

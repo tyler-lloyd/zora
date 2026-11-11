@@ -56,16 +56,23 @@ jobs:
       - uses: azure/setup-helm@v4
       - name: Lint and render
         run: |
-          args="--set cluster.podCIDRs={10.244.0.0/16} --set cluster.serviceCIDRs={10.96.0.0/12}"
+          args="--set cluster.podCIDRs={10.244.0.0/16}"
           helm lint deploy/helm/zora $args
-          helm template zora deploy/helm/zora -n zora-system $args >/dev/null
-          helm template zora deploy/helm/zora -n zora-system $args --set secrets.allNamespaces=true | grep -q 'kind: ClusterRoleBinding'
-          # The required values must be enforced.
-          ! helm template zora deploy/helm/zora -n zora-system 2>/dev/null
+          helm template zora deploy/helm/zora -n zora-system $args --kube-version 1.33.0 >/dev/null
+          helm template zora deploy/helm/zora -n zora-system $args --kube-version 1.33.0 --set secrets.allNamespaces=true | grep -q 'kind: ClusterRoleBinding'
+          # The required values must be enforced: pod CIDRs always, Service
+          # CIDRs where the cluster is too old to be asked.
+          ! helm template zora deploy/helm/zora -n zora-system --kube-version 1.33.0 2>/dev/null
+          ! helm template zora deploy/helm/zora -n zora-system $args --kube-version 1.32.0 2>/dev/null
+          helm template zora deploy/helm/zora -n zora-system $args --kube-version 1.32.0 --set 'cluster.serviceCIDRs={10.96.0.0/12}' >/dev/null
 
   # Builds the image and installs the chart into a real cluster.
   e2e-smoke:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cni: [kindnet, flannel, cilium]
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
@@ -74,4 +81,6 @@ jobs:
           install_only: true
       - run: sudo modprobe wireguard
       - run: hack/e2e-smoke.sh
+        env:
+          CNI: ${{ matrix.cni }}
 

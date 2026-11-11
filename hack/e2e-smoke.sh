@@ -5,10 +5,18 @@
 # node. The tunnel has no live peer; traffic through tunnels is covered by
 # the netns and integration tests.
 #
+# CNI selects the cluster's primary CNI: kindnet (kind's default), flannel or
+# cilium. For flannel and cilium, zora is installed *before* the primary, to
+# check that it waits for the primary's config instead of writing its own.
+#
 # Needs docker, kind, kubectl and helm, and the wireguard kernel module.
 set -euo pipefail
 
-CLUSTER=${CLUSTER:-zora-e2e}
+CNI=${CNI:-kindnet}
+FLANNEL_VERSION=v0.28.10
+CNI_PLUGINS_VERSION=v1.10.0
+CILIUM_VERSION=1.20.4
+CLUSTER=${CLUSTER:-zora-e2e-$CNI}
 IMAGE=${IMAGE:-zora:e2e}
 NODE=$CLUSTER-control-plane
 cd "$(dirname "$0")/.."
@@ -25,25 +33,78 @@ diagnose() {
   kubectl get events -A --sort-by=.lastTimestamp | tail -30
   docker exec "$NODE" sh -c 'ls -la /etc/cni/net.d /opt/cni/bin; cat /etc/cni/net.d/*.conflist'
 }
+
+chained() {
+  docker exec "$NODE" sh -c 'grep -q "\"zora\"" /etc/cni/net.d/*.conflist 2>/dev/null && test -x /opt/cni/bin/zora'
+}
+
+install_zora() { # extra helm args
+  helm upgrade --install zora deploy/helm/zora -n zora-system --create-namespace \
+    --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE#*:}" --set image.pullPolicy=Never \
+    --set 'cluster.podCIDRs={10.244.0.0/16}' --set 'secrets.namespaces={default}' "$@"
+}
+
+install_primary() {
+  case $CNI in
+    flannel)
+      # kind's node image lacks the bridge plugin that flannel delegates to.
+      curl -fsSL "https://github.com/containernetworking/plugins/releases/download/$CNI_PLUGINS_VERSION/cni-plugins-linux-amd64-$CNI_PLUGINS_VERSION.tgz" \
+        | docker exec -i "$NODE" tar -xz -C /opt/cni/bin ./bridge
+      kubectl apply -f "https://github.com/flannel-io/flannel/releases/download/$FLANNEL_VERSION/kube-flannel.yml"
+      ;;
+    cilium)
+      # cni.exclusive=false: otherwise Cilium reverts zora's entry.
+      helm upgrade --install cilium cilium --repo https://helm.cilium.io --version "$CILIUM_VERSION" -n kube-system \
+        --set ipam.mode=kubernetes --set cni.exclusive=false --set operator.replicas=1
+      ;;
+  esac
+}
 trap 'diagnose' ERR
 
-step "cluster"
-kind get clusters | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --wait 120s
+step "cluster ($CNI)"
+if ! kind get clusters | grep -qx "$CLUSTER"; then
+  if [ "$CNI" = kindnet ]; then
+    kind create cluster --name "$CLUSTER" --wait 120s
+  else
+    kind create cluster --name "$CLUSTER" --config - <<KIND
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: 10.244.0.0/16
+KIND
+  fi
+fi
 kubectl config use-context "kind-$CLUSTER" >/dev/null
-docker exec "$NODE" sh -c 'cat /etc/cni/net.d/*.conflist' > /tmp/zora-e2e-conflist.before
 
 step "image"
 docker build -q -t "$IMAGE" .
 kind load docker-image --name "$CLUSTER" "$IMAGE"
 
-step "install"
-helm upgrade --install zora deploy/helm/zora -n zora-system --create-namespace \
-  --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE#*:}" --set image.pullPolicy=Never \
-  --set 'cluster.podCIDRs={10.244.0.0/16}' --set 'cluster.serviceCIDRs={10.96.0.0/16}' \
-  --set 'secrets.namespaces={default}' --wait --timeout 180s
-kubectl -n zora-system rollout status ds/zora-agent --timeout=120s
-docker exec "$NODE" sh -c 'grep -q "\"zora\"" /etc/cni/net.d/*.conflist && test -x /opt/cni/bin/zora' \
-  || fail "zora is not chained into the node's CNI config"
+if [ "$CNI" = kindnet ]; then
+  step "install"
+  install_zora --wait --timeout 180s
+else
+  step "install zora before the primary CNI"
+  install_zora
+  kubectl -n zora-system rollout status ds/zora-agent --timeout=20s 2>/dev/null && fail "zora is ready with no primary CNI"
+  # Give the agent time to do the wrong thing, then check it didn't.
+  for _ in $(seq 30); do
+    kubectl -n zora-system get pods -o jsonpath='{.items[*].status.phase}' | grep -q Running && break
+    sleep 2
+  done
+  sleep 5
+  [ -z "$(docker exec "$NODE" sh -c 'ls /etc/cni/net.d 2>/dev/null')" ] || fail "something wrote a CNI config before the primary CNI was installed"
+
+  step "install $CNI"
+  install_primary
+  kubectl wait --for=condition=Ready node --all --timeout=300s
+fi
+kubectl -n zora-system rollout status ds/zora-agent --timeout=180s
+chained || fail "zora is not chained into the node's CNI config"
+# What the node's config should be once zora is gone again.
+docker exec "$NODE" sh -c 'cat /etc/cni/net.d/*.conflist' > /tmp/zora-e2e-conflist.chained
+kubectl -n kube-system rollout status deploy/coredns --timeout=180s
 
 step "pods"
 # Any 32 random bytes are a valid WireGuard key.
@@ -90,8 +151,7 @@ kubectl delete pod typo --wait=true
 step "an agent restart leaves zora installed"
 kubectl -n zora-system rollout restart ds/zora-agent
 kubectl -n zora-system rollout status ds/zora-agent --timeout=120s
-docker exec "$NODE" sh -c 'grep -q "\"zora\"" /etc/cni/net.d/*.conflist && test -x /opt/cni/bin/zora' \
-  || fail "the agent restart uninstalled zora"
+chained || fail "the agent restart uninstalled zora"
 kubectl exec vpn -- ip addr show wg0 >/dev/null || fail "the vpn pod lost its tunnel"
 
 step "uninstall restores the node"
@@ -101,8 +161,9 @@ docker exec "$NODE" sh -c '! test -e /opt/cni/bin/zora' || fail "the plugin bina
 docker exec "$NODE" sh -c 'cat /etc/cni/net.d/*.conflist' > /tmp/zora-e2e-conflist.after
 python3 - <<'PY' || fail "the CNI config differs from the original"
 import json
-a, b = (json.load(open(f"/tmp/zora-e2e-conflist.{x}")) for x in ("before", "after"))
-assert a == b, (a, b)
+want, got = (json.load(open(f"/tmp/zora-e2e-conflist.{x}")) for x in ("chained", "after"))
+want["plugins"] = [p for p in want["plugins"] if p["type"] != "zora"]
+assert want == got, (want, got)
 PY
 pod after-uninstall ""
 kubectl wait --for=condition=Ready pod/after-uninstall --timeout=120s

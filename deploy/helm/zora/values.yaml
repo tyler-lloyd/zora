@@ -1,10 +1,16 @@
-# Required. Traffic to these ranges never enters a pod's tunnel, so tunnelled
-# pods can still reach other pods, Services and cluster DNS. Getting them
-# wrong breaks DNS and health checks for tunnelled pods.
+# Traffic to these ranges never enters a pod's tunnel, so tunnelled pods can
+# still reach other pods, Services and cluster DNS. If a range is wrong, the
+# agents report it and stay not-ready.
 cluster:
-  # Your cluster's pod CIDR(s), e.g. ["10.244.0.0/16"].
+  # Required: your cluster's pod CIDR(s), e.g. ["10.244.0.0/16"]. Often:
+  #   kubectl cluster-info dump | grep -m1 cluster-cidr
+  # (your CNI's own configuration is the authority if it manages addresses
+  # itself, as Cilium's cluster-pool mode and Calico do).
   podCIDRs: []
-  # Your cluster's Service CIDR(s), e.g. ["10.96.0.0/12"].
+  # Your cluster's Service CIDR(s), e.g. ["10.96.0.0/12"]. Leave empty on
+  # Kubernetes 1.33 or newer, where zora reads them from the cluster. Older
+  # clusters must set it:
+  #   kubectl cluster-info dump | grep -m1 service-cluster-ip-range
   serviceCIDRs: []
   # Anything else to keep out of tunnels, e.g. a NodeLocal DNSCache address
   # ["169.254.20.10/32"]. Node addresses are kept out automatically.

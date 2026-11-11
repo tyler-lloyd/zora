@@ -54,7 +54,7 @@ func run(log *slog.Logger, args []string) error {
 	fs.StringVar(&o.CNIBinDir, "cni-bin-dir", "/host/opt/cni/bin", "the host's CNI plugin directory, as mounted here")
 	fs.StringVar(&o.PluginSource, "plugin-source", "/usr/local/bin/zora-cni", "the zora-cni binary to install")
 	fs.StringVar(&podCIDRs, "pod-cidrs", "", "comma-separated cluster pod CIDRs, kept out of every tunnel")
-	fs.StringVar(&serviceCIDRs, "service-cidrs", "", "comma-separated cluster service CIDRs, kept out of every tunnel")
+	fs.StringVar(&serviceCIDRs, "service-cidrs", "", "comma-separated cluster service CIDRs, kept out of every tunnel; detected from the cluster on Kubernetes 1.33+ when unset")
 	fs.StringVar(&extraExcludes, "extra-excludes", "", "comma-separated extra CIDRs kept out of every tunnel (e.g. NodeLocal DNS)")
 	fs.StringVar(&excludeNS, "exclude-namespaces", "kube-system", "comma-separated namespaces zora never touches")
 	fs.StringVar(&hostModeNS, "host-mode-namespaces", "", "comma-separated namespaces allowed to use host mode (bypasses NetworkPolicy for tunnel traffic)")
@@ -120,10 +120,10 @@ func run(log *slog.Logger, args []string) error {
 		return agent.RemoveDaemonSet(ctx, client, o.DaemonSetNamespace, o.DaemonSetName, 2*time.Second)
 	}
 
-	if len(o.Cluster.PodCIDRs) == 0 || len(o.Cluster.ServiceCIDRs) == 0 {
-		// Without them a full-tunnel pod would lose DNS, Services and
-		// probes. Refuse to start rather than break pods quietly.
-		return fmt.Errorf("--pod-cidrs and --service-cidrs are required")
+	if len(o.Cluster.PodCIDRs) == 0 {
+		// Without it, a full-tunnel pod would send traffic for other pods
+		// into its tunnel. Refuse to start rather than break pods quietly.
+		return fmt.Errorf("--pod-cidrs is required")
 	}
 	cfg, err := restConfig(kubeconfig)
 	if err != nil {
